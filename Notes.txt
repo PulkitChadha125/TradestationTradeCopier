@@ -1,0 +1,23 @@
+In this project, we are going to create a TradeStation trade copier. There will be a master contract/master account and there will be a client account. So, how it should work: We will create a flash server that will open, and we have four tabs in it:
+1. API settings (where master and client both API settings are saved)
+2. They will be saved from there. When I click on save it should be saved in a CSV permanently.
+
+Whenever master contract you see a position, you will copy it to the client account with same lot size, same symbol, everything same
+There should be two more tabs:
+1. Master position
+2. Client position  In the client position you see both account net position running that you will fetch from the API and display over there
+
+There should be an order log page where each order will be logged. When I click on any order we should be able to see:
+- Client order placement and request
+- Admin order placement and request
+
+And latency of order
+
+Theme of this particular application will be white and maroon
+
+Create a requirement.txt file in which you will list all the requirements for this particular project
+
+
+api documentation: https://api.tradestation.com/docs/
+api auth: https://api.tradestation.com/docs/fundamentals/authentication/auth-overview/
+http streaming: https://api.tradestation.com/docs/fundamentals/http-streaming

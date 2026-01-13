@@ -1,0 +1,368 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="settings-container">
+    <h2>API Settings</h2>
+    <p class="description">Configure your master and client TradeStation API credentials. Settings are saved to CSV.</p>
+    
+    <form id="api-settings-form" onsubmit="return false;">
+        <div class="settings-section">
+            <div class="section-header">
+                <h3>Master Account Settings</h3>
+                <div class="login-controls">
+                    <button type="button" id="login-master-btn" class="btn btn-secondary" onclick="loginAccount('master')">
+                        Login
+                    </button>
+                    <span id="master-login-status" class="login-status">
+                        {% if login_status.master.logged_in %}
+                            <span class="status-badge success">✓ Logged In</span>
+                        {% else %}
+                            <span class="status-badge error">Not Logged In</span>
+                        {% endif %}
+                    </span>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="master_client_id">Client ID:</label>
+                <input type="text" id="master_client_id" name="master_client_id" 
+                       value="{{ settings.master.get('client_id', '') if settings.master else '' }}" 
+                       placeholder="Enter master client ID">
+            </div>
+            <div class="form-group">
+                <label for="master_client_secret">Client Secret:</label>
+                <input type="password" id="master_client_secret" name="master_client_secret" 
+                       value="{{ settings.master.get('client_secret', '') if settings.master else '' }}" 
+                       placeholder="Enter master client secret">
+            </div>
+            <div class="form-actions-inline">
+                <button type="button" class="btn btn-primary" onclick="saveCredentials('master')">
+                    Save Key and Secret
+                </button>
+            </div>
+            {% if login_status.master.error %}
+            <div class="error-message-small">
+                <p>{{ login_status.master.error }}</p>
+            </div>
+            {% endif %}
+        </div>
+        
+        <div class="settings-section">
+            <div class="section-header">
+                <h3>Client Account Settings</h3>
+                <div class="login-controls">
+                    <button type="button" id="login-client-btn" class="btn btn-secondary" onclick="loginAccount('client')">
+                        Login
+                    </button>
+                    <span id="client-login-status" class="login-status">
+                        {% if login_status.client.logged_in %}
+                            <span class="status-badge success">✓ Logged In</span>
+                        {% else %}
+                            <span class="status-badge error">Not Logged In</span>
+                        {% endif %}
+                    </span>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="client_client_id">Client ID:</label>
+                <input type="text" id="client_client_id" name="client_client_id" 
+                       value="{{ settings.client.get('client_id', '') if settings.client else '' }}" 
+                       placeholder="Enter client client ID">
+            </div>
+            <div class="form-group">
+                <label for="client_client_secret">Client Secret:</label>
+                <input type="password" id="client_client_secret" name="client_client_secret" 
+                       value="{{ settings.client.get('client_secret', '') if settings.client else '' }}" 
+                       placeholder="Enter client client secret">
+            </div>
+            <div class="form-actions-inline">
+                <button type="button" class="btn btn-primary" onclick="saveCredentials('client')">
+                    Save Key and Secret
+                </button>
+            </div>
+            {% if login_status.client.error %}
+            <div class="error-message-small">
+                <p>{{ login_status.client.error }}</p>
+            </div>
+            {% endif %}
+        </div>
+    </form>
+    
+    <div id="message" class="message"></div>
+    
+    <!-- Copy Trading Controls -->
+    <div class="copier-controls-section">
+        <h3>Copy Trading Controls</h3>
+        <div class="copier-controls">
+            <button type="button" id="start-copier-btn" class="btn btn-primary btn-large" 
+                    onclick="startCopier()" {% if copier_running %}style="display: none;"{% endif %}>
+                Start Copy Trading
+            </button>
+            <button type="button" id="stop-copier-btn" class="btn btn-danger btn-large" 
+                    onclick="stopCopier()" {% if not copier_running %}style="display: none;"{% endif %}>
+                Stop Copy Trading
+            </button>
+            <span id="copier-status-text" class="copier-status">
+                {% if copier_running %}
+                    <span class="status-badge success">● Running</span>
+                {% else %}
+                    <span class="status-badge">○ Stopped</span>
+                {% endif %}
+            </span>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Save credentials for a specific account type
+async function saveCredentials(accountType) {
+    const clientId = document.getElementById(`${accountType}_client_id`).value;
+    const clientSecret = document.getElementById(`${accountType}_client_secret`).value;
+    
+    if (!clientId || !clientSecret) {
+        showMessage(`${accountType.capitalize()} Client ID and Secret are required`, 'error');
+        return;
+    }
+    
+    const btn = document.querySelector(`button[onclick="saveCredentials('${accountType}')"]`);
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+    
+    try {
+        const response = await fetch(`/api/save-credentials/${accountType}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                client_id: clientId,
+                client_secret: clientSecret,
+                refresh_token: '', // Will be obtained during login
+                account_id: '', // Will be auto-detected during login
+                environment: 'paper' // Default to paper trading
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showMessage(result.message, 'success');
+            // Reset login status after saving
+            updateLoginStatus(accountType, false);
+        } else {
+            showMessage(result.message || 'Error saving credentials', 'error');
+        }
+    } catch (error) {
+        showMessage('Error: ' + error.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+    }
+}
+
+// Login to account - handles OAuth flow and auto-detects account_id
+async function loginAccount(accountType) {
+    const btn = document.getElementById(`login-${accountType}-btn`);
+    const statusSpan = document.getElementById(`${accountType}-login-status`);
+    
+    // First, save credentials if not already saved
+    const clientId = document.getElementById(`${accountType}_client_id`).value;
+    const clientSecret = document.getElementById(`${accountType}_client_secret`).value;
+    
+    if (!clientId || !clientSecret) {
+        showMessage(`Please save ${accountType} credentials first`, 'error');
+        return;
+    }
+    
+    btn.disabled = true;
+    btn.textContent = 'Logging in...';
+    
+    try {
+        // Check if refresh token exists
+        const settingsResponse = await fetch('/api/get-settings');
+        const settings = await settingsResponse.json();
+        const hasRefreshToken = settings[accountType]?.refresh_token;
+        
+        if (!hasRefreshToken) {
+            // Need to get refresh token through OAuth
+            const oauthResponse = await fetch(`/api/get-oauth-url/${accountType}`);
+            const oauthData = await oauthResponse.json();
+            
+            if (oauthData.oauth_url) {
+                // Open OAuth URL and prompt for code
+                window.open(oauthData.oauth_url, '_blank');
+                const code = prompt('Please visit the OAuth URL that opened, login, and paste the "code" from the redirect URL here:');
+                
+                if (code) {
+                    // Exchange code for refresh token
+                    const exchangeResponse = await fetch(`/api/exchange-code-for-token/${accountType}`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ code: code })
+                    });
+                    
+                    const exchangeResult = await exchangeResponse.json();
+                    if (!exchangeResult.success) {
+                        showMessage(exchangeResult.message, 'error');
+                        return;
+                    }
+                } else {
+                    showMessage('Login cancelled', 'error');
+                    return;
+                }
+            }
+        }
+        
+        // Now login with refresh token
+        const response = await fetch(`/api/login/${accountType}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            updateLoginStatus(accountType, true);
+            showMessage(result.message, 'success');
+        } else {
+            updateLoginStatus(accountType, false, result.message);
+            showMessage(result.message, 'error');
+        }
+    } catch (error) {
+        updateLoginStatus(accountType, false, error.message);
+        showMessage('Error: ' + error.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Login';
+    }
+}
+
+function updateLoginStatus(accountType, loggedIn, error = null) {
+    const statusSpan = document.getElementById(`${accountType}-login-status`);
+    if (loggedIn) {
+        statusSpan.innerHTML = '<span class="status-badge success">✓ Logged In</span>';
+    } else {
+        statusSpan.innerHTML = '<span class="status-badge error">Not Logged In</span>';
+    }
+}
+
+// Start/Stop copier
+async function startCopier() {
+    const startBtn = document.getElementById('start-copier-btn');
+    const stopBtn = document.getElementById('stop-copier-btn');
+    const statusText = document.getElementById('copier-status-text');
+    
+    startBtn.disabled = true;
+    startBtn.textContent = 'Starting...';
+    
+    try {
+        const response = await fetch('/api/start-copier', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            startBtn.style.display = 'none';
+            stopBtn.style.display = 'inline-block';
+            statusText.innerHTML = '<span class="status-badge success">● Running</span>';
+            showMessage(result.message, 'success');
+        } else {
+            showMessage(result.message, 'error');
+        }
+    } catch (error) {
+        showMessage('Error: ' + error.message, 'error');
+    } finally {
+        startBtn.disabled = false;
+        startBtn.textContent = 'Start Copy Trading';
+    }
+}
+
+async function stopCopier() {
+    if (!confirm('Are you sure you want to stop copy trading?')) {
+        return;
+    }
+    
+    const startBtn = document.getElementById('start-copier-btn');
+    const stopBtn = document.getElementById('stop-copier-btn');
+    const statusText = document.getElementById('copier-status-text');
+    
+    stopBtn.disabled = true;
+    stopBtn.textContent = 'Stopping...';
+    
+    try {
+        const response = await fetch('/api/stop-copier', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            startBtn.style.display = 'inline-block';
+            stopBtn.style.display = 'none';
+            statusText.innerHTML = '<span class="status-badge">○ Stopped</span>';
+            showMessage(result.message, 'success');
+        } else {
+            showMessage(result.message, 'error');
+        }
+    } catch (error) {
+        showMessage('Error: ' + error.message, 'error');
+    } finally {
+        stopBtn.disabled = false;
+        stopBtn.textContent = 'Stop Copy Trading';
+    }
+}
+
+function showMessage(text, type) {
+    const messageDiv = document.getElementById('message');
+    messageDiv.textContent = text;
+    messageDiv.className = `message ${type}`;
+    
+    setTimeout(() => {
+        messageDiv.textContent = '';
+        messageDiv.className = 'message';
+    }, 3000);
+}
+
+
+// Check copier status periodically
+setInterval(async function() {
+    try {
+        const response = await fetch('/api/copier-status');
+        const data = await response.json();
+        
+        const startBtn = document.getElementById('start-copier-btn');
+        const stopBtn = document.getElementById('stop-copier-btn');
+        const statusText = document.getElementById('copier-status-text');
+        
+        if (data.running) {
+            if (startBtn.style.display !== 'none') {
+                startBtn.style.display = 'none';
+                stopBtn.style.display = 'inline-block';
+                statusText.innerHTML = '<span class="status-badge success">● Running</span>';
+            }
+        } else {
+            if (stopBtn.style.display !== 'none') {
+                startBtn.style.display = 'inline-block';
+                stopBtn.style.display = 'none';
+                statusText.innerHTML = '<span class="status-badge">○ Stopped</span>';
+            }
+        }
+    } catch (error) {
+        console.error('Error checking copier status:', error);
+    }
+}, 3000);
+</script>
+{% endblock %}

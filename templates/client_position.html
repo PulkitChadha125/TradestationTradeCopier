@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="positions-container">
+    <h2>Client Account Positions</h2>
+    <button onclick="refreshPositions()" class="btn btn-secondary">Refresh</button>
+    
+    {% if error %}
+    <div class="error-message">
+        <p>Error loading positions: {{ error }}</p>
+    </div>
+    {% elif positions %}
+    <table class="positions-table">
+        <thead>
+            <tr>
+                <th>Symbol</th>
+                <th>Quantity</th>
+                <th>Average Price</th>
+                <th>Market Value</th>
+                <th>Unrealized P&L</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for position in positions %}
+            <tr>
+                <td>{{ position.get('Symbol', 'N/A') }}</td>
+                <td class="{% if position.get('Quantity', 0) > 0 %}positive{% elif position.get('Quantity', 0) < 0 %}negative{% endif %}">
+                    {{ position.get('Quantity', 0) }}
+                </td>
+                <td>${{ "%.2f"|format(position.get('AveragePrice', 0)) }}</td>
+                <td>${{ "%.2f"|format(position.get('MarketValue', 0)) }}</td>
+                <td class="{% if position.get('UnrealizedPL', 0) >= 0 %}positive{% else %}negative{% endif %}">
+                    ${{ "%.2f"|format(position.get('UnrealizedPL', 0)) }}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="no-data">
+        <p>No positions found. Please check your API settings.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function refreshPositions() {
+    window.location.reload();
+}
+</script>
+{% endblock %}

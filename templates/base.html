@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TradeStation Trade Copier</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>TradeStation Trade Copier</h1>
+            <nav class="tabs">
+                <a href="{{ url_for('api_settings') }}" class="tab-link {% if request.endpoint == 'api_settings' %}active{% endif %}">API Settings</a>
+                <a href="{{ url_for('master_position') }}" class="tab-link {% if request.endpoint == 'master_position' %}active{% endif %}">Master Position</a>
+                <a href="{{ url_for('client_position') }}" class="tab-link {% if request.endpoint == 'client_position' %}active{% endif %}">Client Position</a>
+                <a href="{{ url_for('order_log') }}" class="tab-link {% if request.endpoint == 'order_log' %}active{% endif %}">Order Log</a>
+            </nav>
+        </header>
+        
+        <main>
+            {% block content %}{% endblock %}
+        </main>
+        
+        {% if request.endpoint != 'api_settings' %}
+        <footer>
+            <div id="copier-status" class="status-indicator">
+                <span id="status-text">Copier: Stopped</span>
+                <button id="start-copier-btn" class="btn btn-primary">Start Copier</button>
+                <button id="stop-copier-btn" class="btn btn-danger" style="display: none;">Stop Copier</button>
+            </div>
+        </footer>
+        {% endif %}
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

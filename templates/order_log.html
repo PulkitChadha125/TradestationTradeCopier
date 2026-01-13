@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="order-log-container">
+    <h2>Order Log</h2>
+    <button onclick="refreshLog()" class="btn btn-secondary">Refresh</button>
+    
+    {% if orders %}
+    <table class="order-table">
+        <thead>
+            <tr>
+                <th>Timestamp</th>
+                <th>Order ID</th>
+                <th>Symbol</th>
+                <th>Quantity</th>
+                <th>Side</th>
+                <th>Status</th>
+                <th>Client Latency (ms)</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for order in orders %}
+            <tr>
+                <td>{{ order.get('timestamp', 'N/A')[:19] }}</td>
+                <td>{{ order.get('order_id', 'N/A') }}</td>
+                <td>{{ order.get('symbol', 'N/A') }}</td>
+                <td>{{ order.get('quantity', 'N/A') }}</td>
+                <td class="{% if order.get('side') == 'BUY' %}positive{% else %}negative{% endif %}">
+                    {{ order.get('side', 'N/A') }}
+                </td>
+                <td class="{% if order.get('status') == 'SUCCESS' %}success{% else %}error-status{% endif %}">
+                    {{ order.get('status', 'N/A') }}
+                </td>
+                <td>{{ order.get('client_latency', 'N/A') }}</td>
+                <td>
+                    <button onclick="showOrderDetails('{{ order.get('order_id') }}')" class="btn btn-small">Details</button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="no-data">
+        <p>No orders logged yet.</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Order Details Modal -->
+<div id="order-modal" class="modal">
+    <div class="modal-content">
+        <span class="close" onclick="closeModal()">&times;</span>
+        <h3>Order Details</h3>
+        <div id="order-details-content"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function refreshLog() {
+    window.location.reload();
+}
+
+function showOrderDetails(orderId) {
+    fetch(`/api/order-details/${orderId}`)
+        .then(response => response.json())
+        .then(data => {
+            const content = document.getElementById('order-details-content');
+            content.innerHTML = `
+                <div class="order-details">
+                    <div class="detail-section">
+                        <h4>Order Information</h4>
+                        <p><strong>Order ID:</strong> ${data.order_id || 'N/A'}</p>
+                        <p><strong>Symbol:</strong> ${data.symbol || 'N/A'}</p>
+                        <p><strong>Quantity:</strong> ${data.quantity || 'N/A'}</p>
+                        <p><strong>Side:</strong> ${data.side || 'N/A'}</p>
+                        <p><strong>Order Type:</strong> ${data.order_type || 'N/A'}</p>
+                        <p><strong>Status:</strong> ${data.status || 'N/A'}</p>
+                    </div>
+                    <div class="detail-section">
+                        <h4>Master Account</h4>
+                        <p><strong>Request Time:</strong> ${data.master_request_time || 'N/A'}</p>
+                        <p><strong>Response Time:</strong> ${data.master_response_time || 'N/A'}</p>
+                        <p><strong>Latency:</strong> ${data.master_latency || 'N/A'} ms</p>
+                    </div>
+                    <div class="detail-section">
+                        <h4>Client Account</h4>
+                        <p><strong>Request Time:</strong> ${data.client_request_time || 'N/A'}</p>
+                        <p><strong>Response Time:</strong> ${data.client_response_time || 'N/A'}</p>
+                        <p><strong>Latency:</strong> ${data.client_latency || 'N/A'} ms</p>
+                    </div>
+                    ${data.error ? `<div class="error-message"><p><strong>Error:</strong> ${data.error}</p></div>` : ''}
+                </div>
+            `;
+            document.getElementById('order-modal').style.display = 'block';
+        })
+        .catch(error => {
+            console.error('Error fetching order details:', error);
+        });
+}
+
+function closeModal() {
+    document.getElementById('order-modal').style.display = 'none';
+}
+
+window.onclick = function(event) {
+    const modal = document.getElementById('order-modal');
+    if (event.target == modal) {
+        modal.style.display = 'none';
+    }
+}
+</script>
+{% endblock %}
