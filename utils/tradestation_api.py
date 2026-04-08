@@ -161,3 +161,94 @@ class TradeStationAPI:
         except Exception as e:
             print(f"Error fetching account info: {e}")
             raise
+    
+    def get_orders(self, since_date=None):
+        """Get orders for the account"""
+        self.ensure_authenticated()
+        
+        url = f"{self.base_url}/brokerage/accounts/{self.account_id}/orders"
+        headers = {
+            'Authorization': f'Bearer {self.access_token}',
+            'Content-Type': 'application/json'
+        }
+        
+        params = {}
+        if since_date:
+            params['since'] = since_date
+        
+        try:
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+            response.raise_for_status()
+            orders = response.json()
+            return orders if isinstance(orders, list) else []
+        except Exception as e:
+            print(f"Error fetching orders: {e}")
+            raise
+    
+    def get_historical_orders(self, since_date=None):
+        """Get historical orders for the account"""
+        self.ensure_authenticated()
+        
+        url = f"{self.base_url}/brokerage/accounts/{self.account_id}/historicalorders"
+        headers = {
+            'Authorization': f'Bearer {self.access_token}',
+            'Content-Type': 'application/json'
+        }
+        
+        params = {}
+        if since_date:
+            params['since'] = since_date
+        
+        try:
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+            response.raise_for_status()
+            orders = response.json()
+            return orders if isinstance(orders, list) else []
+        except Exception as e:
+            print(f"Error fetching historical orders: {e}")
+            raise
+    
+    def get_account_balance(self):
+        """Get account balance"""
+        self.ensure_authenticated()
+        
+        if not self.account_id:
+            raise ValueError("Account ID is required to get balance")
+        
+        url = f"{self.base_url}/brokerage/accounts/{self.account_id}/balances"
+        headers = {
+            'Authorization': f'Bearer {self.access_token}',
+            'Content-Type': 'application/json'
+        }
+        
+        print(f"[API] Calling balance endpoint: {url}")
+        print(f"[API] Account ID: {self.account_id}")
+        print(f"[API] Access token present: {bool(self.access_token)}")
+        print(f"[API] Access token (first 20 chars): {self.access_token[:20] if self.access_token else 'None'}...")
+        
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            print(f"[API] Response status code: {response.status_code}")
+            print(f"[API] Response headers: {dict(response.headers)}")
+            
+            # Print raw response text before parsing (full response)
+            print(f"[API] Raw response text (full): {response.text}")
+            
+            response.raise_for_status()
+            balance_data = response.json()
+            
+            print(f"[API] Parsed JSON response type: {type(balance_data)}")
+            print(f"[API] Parsed JSON response: {balance_data}")
+            
+            return balance_data
+        except requests.exceptions.HTTPError as e:
+            print(f"[API] HTTP Error fetching account balance: {e}")
+            print(f"[API] Response status: {response.status_code}")
+            print(f"[API] Response text: {response.text}")
+            raise
+        except Exception as e:
+            print(f"[API] Error fetching account balance: {e}")
+            print(f"[API] Error type: {type(e)}")
+            import traceback
+            print(f"[API] Traceback: {traceback.format_exc()}")
+            raise

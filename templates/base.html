@@ -7,30 +7,56 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>TradeStation Trade Copier</h1>
-            <nav class="tabs">
-                <a href="{{ url_for('api_settings') }}" class="tab-link {% if request.endpoint == 'api_settings' %}active{% endif %}">API Settings</a>
-                <a href="{{ url_for('master_position') }}" class="tab-link {% if request.endpoint == 'master_position' %}active{% endif %}">Master Position</a>
-                <a href="{{ url_for('client_position') }}" class="tab-link {% if request.endpoint == 'client_position' %}active{% endif %}">Client Position</a>
-                <a href="{{ url_for('order_log') }}" class="tab-link {% if request.endpoint == 'order_log' %}active{% endif %}">Order Log</a>
-            </nav>
-        </header>
-        
-        <main>
-            {% block content %}{% endblock %}
-        </main>
-        
-        {% if request.endpoint != 'api_settings' %}
-        <footer>
-            <div id="copier-status" class="status-indicator">
-                <span id="status-text">Copier: Stopped</span>
-                <button id="start-copier-btn" class="btn btn-primary">Start Copier</button>
-                <button id="stop-copier-btn" class="btn btn-danger" style="display: none;">Stop Copier</button>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h1>TradeStation Trade Copier</h1>
             </div>
-        </footer>
-        {% endif %}
+            <nav class="sidebar-nav">
+                <a href="{{ url_for('api_settings') }}" class="nav-link {% if request.endpoint == 'api_settings' %}active{% endif %}">
+                    <span class="nav-icon">⚙️</span>
+                    <span class="nav-text">API Settings</span>
+                </a>
+                <a href="{{ url_for('master_position') }}" class="nav-link {% if request.endpoint == 'master_position' %}active{% endif %}">
+                    <span class="nav-icon">📊</span>
+                    <span class="nav-text">Master Position</span>
+                </a>
+                <a href="{{ url_for('client_position') }}" class="nav-link {% if request.endpoint == 'client_position' %}active{% endif %}">
+                    <span class="nav-icon">📈</span>
+                    <span class="nav-text">Client Position</span>
+                </a>
+                <a href="{{ url_for('order_log') }}" class="nav-link {% if request.endpoint == 'order_log' %}active{% endif %}">
+                    <span class="nav-icon">📋</span>
+                    <span class="nav-text">Order Log</span>
+                </a>
+                <a href="{{ url_for('tradebook_master') }}" class="nav-link {% if request.endpoint == 'tradebook_master' %}active{% endif %}">
+                    <span class="nav-icon">📖</span>
+                    <span class="nav-text">TradeBook Master</span>
+                </a>
+                <a href="{{ url_for('tradebook_client') }}" class="nav-link {% if request.endpoint == 'tradebook_client' %}active{% endif %}">
+                    <span class="nav-icon">📗</span>
+                    <span class="nav-text">TradeBook Client</span>
+                </a>
+            </nav>
+        </aside>
+        
+        <!-- Main Content Area -->
+        <div class="main-wrapper">
+            <main class="main-content">
+                {% block content %}{% endblock %}
+            </main>
+            
+            {% if request.endpoint != 'api_settings' %}
+            <footer class="main-footer">
+                <div id="copier-status" class="status-indicator">
+                    <span id="status-text">Copier: Stopped</span>
+                    <button id="start-copier-btn" class="btn btn-primary">Start Copier</button>
+                    <button id="stop-copier-btn" class="btn btn-danger" style="display: none;">Stop Copier</button>
+                </div>
+            </footer>
+            {% endif %}
+        </div>
     </div>
     
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>

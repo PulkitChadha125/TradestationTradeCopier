@@ -1,3 +1,10 @@
+Tradestation credentials
+key:
+secret: 
+
+refresh: http://localhost:3000/?code=U1WwkIK39Rcnri8VrDqSY_j93gvQbo3xfcF_elRlShOP3
+
+
 In this project, we are going to create a TradeStation trade copier. There will be a master contract/master account and there will be a client account. So, how it should work: We will create a flash server that will open, and we have four tabs in it:
 1. API settings (where master and client both API settings are saved)
 2. They will be saved from there. When I click on save it should be saved in a CSV permanently.

@@ -3,93 +3,9 @@
 {% block content %}
 <div class="settings-container">
     <h2>API Settings</h2>
-    <p class="description">Configure your master and client TradeStation API credentials. Settings are saved to CSV.</p>
+    <p class="description">Configure your TradeStation API credentials. API Key and Secret are shared globally. Each account has its own User ID, Password, and TOTP.</p>
     
-    <form id="api-settings-form" onsubmit="return false;">
-        <div class="settings-section">
-            <div class="section-header">
-                <h3>Master Account Settings</h3>
-                <div class="login-controls">
-                    <button type="button" id="login-master-btn" class="btn btn-secondary" onclick="loginAccount('master')">
-                        Login
-                    </button>
-                    <span id="master-login-status" class="login-status">
-                        {% if login_status.master.logged_in %}
-                            <span class="status-badge success">✓ Logged In</span>
-                        {% else %}
-                            <span class="status-badge error">Not Logged In</span>
-                        {% endif %}
-                    </span>
-                </div>
-            </div>
-            <div class="form-group">
-                <label for="master_client_id">Client ID:</label>
-                <input type="text" id="master_client_id" name="master_client_id" 
-                       value="{{ settings.master.get('client_id', '') if settings.master else '' }}" 
-                       placeholder="Enter master client ID">
-            </div>
-            <div class="form-group">
-                <label for="master_client_secret">Client Secret:</label>
-                <input type="password" id="master_client_secret" name="master_client_secret" 
-                       value="{{ settings.master.get('client_secret', '') if settings.master else '' }}" 
-                       placeholder="Enter master client secret">
-            </div>
-            <div class="form-actions-inline">
-                <button type="button" class="btn btn-primary" onclick="saveCredentials('master')">
-                    Save Key and Secret
-                </button>
-            </div>
-            {% if login_status.master.error %}
-            <div class="error-message-small">
-                <p>{{ login_status.master.error }}</p>
-            </div>
-            {% endif %}
-        </div>
-        
-        <div class="settings-section">
-            <div class="section-header">
-                <h3>Client Account Settings</h3>
-                <div class="login-controls">
-                    <button type="button" id="login-client-btn" class="btn btn-secondary" onclick="loginAccount('client')">
-                        Login
-                    </button>
-                    <span id="client-login-status" class="login-status">
-                        {% if login_status.client.logged_in %}
-                            <span class="status-badge success">✓ Logged In</span>
-                        {% else %}
-                            <span class="status-badge error">Not Logged In</span>
-                        {% endif %}
-                    </span>
-                </div>
-            </div>
-            <div class="form-group">
-                <label for="client_client_id">Client ID:</label>
-                <input type="text" id="client_client_id" name="client_client_id" 
-                       value="{{ settings.client.get('client_id', '') if settings.client else '' }}" 
-                       placeholder="Enter client client ID">
-            </div>
-            <div class="form-group">
-                <label for="client_client_secret">Client Secret:</label>
-                <input type="password" id="client_client_secret" name="client_client_secret" 
-                       value="{{ settings.client.get('client_secret', '') if settings.client else '' }}" 
-                       placeholder="Enter client client secret">
-            </div>
-            <div class="form-actions-inline">
-                <button type="button" class="btn btn-primary" onclick="saveCredentials('client')">
-                    Save Key and Secret
-                </button>
-            </div>
-            {% if login_status.client.error %}
-            <div class="error-message-small">
-                <p>{{ login_status.client.error }}</p>
-            </div>
-            {% endif %}
-        </div>
-    </form>
-    
-    <div id="message" class="message"></div>
-    
-    <!-- Copy Trading Controls -->
+    <!-- Copy Trading Controls at the top -->
     <div class="copier-controls-section">
         <h3>Copy Trading Controls</h3>
         <div class="copier-controls">
@@ -110,38 +26,240 @@
             </span>
         </div>
     </div>
+    
+    <form id="api-settings-form" onsubmit="return false;">
+        <!-- Global API Settings -->
+        <div class="settings-section">
+            <h3>Global API Credentials</h3>
+            <div class="form-group">
+                <label for="api_key">API Key:</label>
+                <input type="text" id="api_key" name="api_key" 
+                       value="{{ settings.global.get('api_key', '') if settings.global else '' }}" 
+                       placeholder="Enter API Key">
+            </div>
+            <div class="form-group">
+                <label for="api_secret">API Secret:</label>
+                <input type="password" id="api_secret" name="api_secret" 
+                       value="{{ settings.global.get('api_secret', '') if settings.global else '' }}" 
+                       placeholder="Enter API Secret">
+            </div>
+            <div class="form-actions-inline">
+                <button type="button" class="btn btn-primary" onclick="saveGlobalCredentials()">
+                    Save API Key and Secret
+                </button>
+            </div>
+        </div>
+        
+        <!-- Master and Client Accounts Side by Side -->
+        <div class="accounts-row">
+            <!-- Master Account Settings -->
+            <div class="settings-section account-section">
+            <div class="section-header">
+                <h3>Master Account Settings</h3>
+                <div class="login-controls">
+                    <button type="button" id="login-master-btn" class="btn btn-secondary" onclick="loginAccount('master')">
+                        Login
+                    </button>
+                    <span id="master-login-status" class="login-status">
+                        {% if login_status.master.logged_in %}
+                            <span class="status-badge success">✓ Logged In</span>
+                        {% else %}
+                            <span class="status-badge error">Not Logged In</span>
+                        {% endif %}
+                    </span>
+                </div>
+            </div>
+            <!-- Account Balance Display Card -->
+            <div id="master-balance-section" class="balance-card">
+                <div class="balance-card-header">
+                    <h4>Master Account Balance</h4>
+                    <button type="button" class="btn btn-secondary btn-small" onclick="refreshBalance('master')" title="Refresh Balance">
+                        🔄
+                    </button>
+                </div>
+                <div class="balance-card-content">
+                    <div id="master-balance-loading" class="balance-loading" style="display: none;">
+                        <span>Loading balance...</span>
+                    </div>
+                    <div id="master-balance-error" class="balance-error" style="display: none;">
+                        <span id="master-balance-error-text">Error loading balance</span>
+                    </div>
+                    <div id="master-balance-data" class="balance-data" style="display: none;">
+                        <div class="balance-card-item">
+                            <div class="balance-card-label">Account ID</div>
+                            <div id="master-account-id" class="balance-card-value">-</div>
+                        </div>
+                        <div class="balance-card-item">
+                            <div class="balance-card-label">Cash Balance</div>
+                            <div id="master-cash-balance" class="balance-card-value balance-amount">-</div>
+                        </div>
+                        <div class="balance-card-item">
+                            <div class="balance-card-label">Buying Power</div>
+                            <div id="master-buying-power" class="balance-card-value balance-amount">-</div>
+                        </div>
+                        <div class="balance-card-item">
+                            <div class="balance-card-label">Equity</div>
+                            <div id="master-equity" class="balance-card-value balance-amount">-</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="master_user_id">User ID:</label>
+                <input type="text" id="master_user_id" name="master_user_id" 
+                       value="{{ settings.master.get('user_id', '') if settings.master else '' }}" 
+                       placeholder="Enter master user ID">
+            </div>
+            <div class="form-group">
+                <label for="master_password">Password:</label>
+                <div class="password-input-wrapper">
+                    <input type="password" id="master_password" name="master_password" 
+                           value="{{ settings.master.get('password', '') if settings.master else '' }}" 
+                           placeholder="Enter master password">
+                    <button type="button" class="password-toggle" onclick="togglePassword('master_password')" title="Show/Hide Password">
+                        <span class="eye-icon">👁️</span>
+                    </button>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="master_totp">TOTP:</label>
+                <input type="text" id="master_totp" name="master_totp" 
+                       value="{{ settings.master.get('totp', '') if settings.master else '' }}" 
+                       placeholder="Enter master TOTP code">
+                <small class="form-help">Time-based One-Time Password from your authenticator app</small>
+            </div>
+            <div class="form-actions-inline">
+                <button type="button" class="btn btn-primary" onclick="saveAccountCredentials('master')">
+                    Save Master Credentials
+                </button>
+            </div>
+            {% if login_status.master.error %}
+            <div class="error-message-small">
+                <p>{{ login_status.master.error }}</p>
+            </div>
+            {% endif %}
+            </div>
+            
+            <!-- Client Account Settings -->
+            <div class="settings-section account-section">
+            <div class="section-header">
+                <h3>Client Account Settings</h3>
+                <div class="login-controls">
+                    <button type="button" id="login-client-btn" class="btn btn-secondary" onclick="loginAccount('client')">
+                        Login
+                    </button>
+                    <span id="client-login-status" class="login-status">
+                        {% if login_status.client.logged_in %}
+                            <span class="status-badge success">✓ Logged In</span>
+                        {% else %}
+                            <span class="status-badge error">Not Logged In</span>
+                        {% endif %}
+                    </span>
+                </div>
+            </div>
+            <!-- Account Balance Display Card -->
+            <div id="client-balance-section" class="balance-card">
+                <div class="balance-card-header">
+                    <h4>Client Account Balance</h4>
+                    <button type="button" class="btn btn-secondary btn-small" onclick="refreshBalance('client')" title="Refresh Balance">
+                        🔄
+                    </button>
+                </div>
+                <div class="balance-card-content">
+                    <div id="client-balance-loading" class="balance-loading" style="display: none;">
+                        <span>Loading balance...</span>
+                    </div>
+                    <div id="client-balance-error" class="balance-error" style="display: none;">
+                        <span id="client-balance-error-text">Error loading balance</span>
+                    </div>
+                    <div id="client-balance-data" class="balance-data" style="display: none;">
+                        <div class="balance-card-item">
+                            <div class="balance-card-label">Account ID</div>
+                            <div id="client-account-id" class="balance-card-value">-</div>
+                        </div>
+                        <div class="balance-card-item">
+                            <div class="balance-card-label">Cash Balance</div>
+                            <div id="client-cash-balance" class="balance-card-value balance-amount">-</div>
+                        </div>
+                        <div class="balance-card-item">
+                            <div class="balance-card-label">Buying Power</div>
+                            <div id="client-buying-power" class="balance-card-value balance-amount">-</div>
+                        </div>
+                        <div class="balance-card-item">
+                            <div class="balance-card-label">Equity</div>
+                            <div id="client-equity" class="balance-card-value balance-amount">-</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="client_user_id">User ID:</label>
+                <input type="text" id="client_user_id" name="client_user_id" 
+                       value="{{ settings.client.get('user_id', '') if settings.client else '' }}" 
+                       placeholder="Enter client user ID">
+            </div>
+            <div class="form-group">
+                <label for="client_password">Password:</label>
+                <div class="password-input-wrapper">
+                    <input type="password" id="client_password" name="client_password" 
+                           value="{{ settings.client.get('password', '') if settings.client else '' }}" 
+                           placeholder="Enter client password">
+                    <button type="button" class="password-toggle" onclick="togglePassword('client_password')" title="Show/Hide Password">
+                        <span class="eye-icon">👁️</span>
+                    </button>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="client_totp">TOTP:</label>
+                <input type="text" id="client_totp" name="client_totp" 
+                       value="{{ settings.client.get('totp', '') if settings.client else '' }}" 
+                       placeholder="Enter client TOTP code">
+                <small class="form-help">Time-based One-Time Password from your authenticator app</small>
+            </div>
+            <div class="form-actions-inline">
+                <button type="button" class="btn btn-primary" onclick="saveAccountCredentials('client')">
+                    Save Client Credentials
+                </button>
+            </div>
+            {% if login_status.client.error %}
+            <div class="error-message-small">
+                <p>{{ login_status.client.error }}</p>
+            </div>
+            {% endif %}
+            </div>
+        </div>
+    </form>
+    
+    <div id="message" class="message"></div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-// Save credentials for a specific account type
-async function saveCredentials(accountType) {
-    const clientId = document.getElementById(`${accountType}_client_id`).value;
-    const clientSecret = document.getElementById(`${accountType}_client_secret`).value;
+// Save global API credentials
+async function saveGlobalCredentials() {
+    const apiKey = document.getElementById('api_key').value;
+    const apiSecret = document.getElementById('api_secret').value;
     
-    if (!clientId || !clientSecret) {
-        showMessage(`${accountType.capitalize()} Client ID and Secret are required`, 'error');
+    if (!apiKey || !apiSecret) {
+        showMessage('API Key and Secret are required', 'error');
         return;
     }
     
-    const btn = document.querySelector(`button[onclick="saveCredentials('${accountType}')"]`);
+    const btn = document.querySelector('button[onclick="saveGlobalCredentials()"]');
     const originalText = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Saving...';
     
     try {
-        const response = await fetch(`/api/save-credentials/${accountType}`, {
+        const response = await fetch('/api/save-global-credentials', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                client_id: clientId,
-                client_secret: clientSecret,
-                refresh_token: '', // Will be obtained during login
-                account_id: '', // Will be auto-detected during login
-                environment: 'paper' // Default to paper trading
+                api_key: apiKey,
+                api_secret: apiSecret
             })
         });
         
@@ -149,7 +267,51 @@ async function saveCredentials(accountType) {
         
         if (result.success) {
             showMessage(result.message, 'success');
-            // Reset login status after saving
+        } else {
+            showMessage(result.message || 'Error saving credentials', 'error');
+        }
+    } catch (error) {
+        showMessage('Error: ' + error.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+    }
+}
+
+// Save account credentials (Master or Client)
+async function saveAccountCredentials(accountType) {
+    const userId = document.getElementById(`${accountType}_user_id`).value;
+    const password = document.getElementById(`${accountType}_password`).value;
+    const totp = document.getElementById(`${accountType}_totp`).value;
+    
+    if (!userId || !password) {
+        const accountName = accountType.charAt(0).toUpperCase() + accountType.slice(1);
+        showMessage(`${accountName} User ID and Password are required`, 'error');
+        return;
+    }
+    
+    const btn = document.querySelector(`button[onclick="saveAccountCredentials('${accountType}')"]`);
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+    
+    try {
+        const response = await fetch(`/api/save-account-credentials/${accountType}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                user_id: userId,
+                password: password,
+                totp: totp
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showMessage(result.message, 'success');
             updateLoginStatus(accountType, false);
         } else {
             showMessage(result.message || 'Error saving credentials', 'error');
@@ -162,62 +324,65 @@ async function saveCredentials(accountType) {
     }
 }
 
-// Login to account - handles OAuth flow and auto-detects account_id
+// Login to account - uses Selenium automation via backend
 async function loginAccount(accountType) {
     const btn = document.getElementById(`login-${accountType}-btn`);
-    const statusSpan = document.getElementById(`${accountType}-login-status`);
     
-    // First, save credentials if not already saved
-    const clientId = document.getElementById(`${accountType}_client_id`).value;
-    const clientSecret = document.getElementById(`${accountType}_client_secret`).value;
+    // Check if global API credentials exist
+    const apiKey = document.getElementById('api_key').value;
+    const apiSecret = document.getElementById('api_secret').value;
     
-    if (!clientId || !clientSecret) {
+    if (!apiKey || !apiSecret) {
+        showMessage('Please save global API Key and Secret first', 'error');
+        return;
+    }
+    
+    // Check if account credentials exist
+    const userId = document.getElementById(`${accountType}_user_id`).value;
+    const password = document.getElementById(`${accountType}_password`).value;
+    const totp = document.getElementById(`${accountType}_totp`).value;
+    
+    if (!userId || !password) {
         showMessage(`Please save ${accountType} credentials first`, 'error');
         return;
     }
     
+    // Make sure credentials are saved before login
+    if (!totp) {
+        showMessage(`Please save ${accountType} TOTP secret first`, 'error');
+        return;
+    }
+    
+    // First, save the credentials to ensure they're in the backend
+    try {
+        const saveResponse = await fetch(`/api/save-account-credentials/${accountType}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                user_id: userId,
+                password: password,
+                totp: totp
+            })
+        });
+        const saveResult = await saveResponse.json();
+        if (!saveResult.success) {
+            showMessage('Please save credentials first: ' + saveResult.message, 'error');
+            return;
+        }
+    } catch (error) {
+        showMessage('Error saving credentials: ' + error.message, 'error');
+        return;
+    }
+    
     btn.disabled = true;
-    btn.textContent = 'Logging in...';
+    btn.textContent = 'Opening Chrome...';
     
     try {
-        // Check if refresh token exists
-        const settingsResponse = await fetch('/api/get-settings');
-        const settings = await settingsResponse.json();
-        const hasRefreshToken = settings[accountType]?.refresh_token;
+        // Call backend login endpoint which will use Selenium to automate everything
+        showMessage('Opening Chrome browser with Selenium automation...', 'success');
         
-        if (!hasRefreshToken) {
-            // Need to get refresh token through OAuth
-            const oauthResponse = await fetch(`/api/get-oauth-url/${accountType}`);
-            const oauthData = await oauthResponse.json();
-            
-            if (oauthData.oauth_url) {
-                // Open OAuth URL and prompt for code
-                window.open(oauthData.oauth_url, '_blank');
-                const code = prompt('Please visit the OAuth URL that opened, login, and paste the "code" from the redirect URL here:');
-                
-                if (code) {
-                    // Exchange code for refresh token
-                    const exchangeResponse = await fetch(`/api/exchange-code-for-token/${accountType}`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({ code: code })
-                    });
-                    
-                    const exchangeResult = await exchangeResponse.json();
-                    if (!exchangeResult.success) {
-                        showMessage(exchangeResult.message, 'error');
-                        return;
-                    }
-                } else {
-                    showMessage('Login cancelled', 'error');
-                    return;
-                }
-            }
-        }
-        
-        // Now login with refresh token
         const response = await fetch(`/api/login/${accountType}`, {
             method: 'POST',
             headers: {
@@ -247,10 +412,168 @@ function updateLoginStatus(accountType, loggedIn, error = null) {
     const statusSpan = document.getElementById(`${accountType}-login-status`);
     if (loggedIn) {
         statusSpan.innerHTML = '<span class="status-badge success">✓ Logged In</span>';
+        // Fetch balance after successful login
+        refreshBalance(accountType);
     } else {
         statusSpan.innerHTML = '<span class="status-badge error">Not Logged In</span>';
+        // Hide balance section if not logged in
+        const balanceSection = document.getElementById(`${accountType}-balance-section`);
+        if (balanceSection) {
+            balanceSection.style.display = 'none';
+        }
     }
 }
+
+// Fetch and display account balance
+async function refreshBalance(accountType) {
+    const balanceSection = document.getElementById(`${accountType}-balance-section`);
+    const loadingEl = document.getElementById(`${accountType}-balance-loading`);
+    const errorEl = document.getElementById(`${accountType}-balance-error`);
+    const errorTextEl = document.getElementById(`${accountType}-balance-error-text`);
+    const dataEl = document.getElementById(`${accountType}-balance-data`);
+    
+    if (!balanceSection) {
+        console.log(`Balance section not found for ${accountType}`);
+        return;
+    }
+    
+    // Show loading state
+    if (loadingEl) loadingEl.style.display = 'block';
+    if (errorEl) errorEl.style.display = 'none';
+    if (dataEl) dataEl.style.display = 'none';
+    
+    try {
+        console.log(`Fetching balance for ${accountType}...`);
+        const response = await fetch(`/api/get-balance/${accountType}`);
+        const result = await response.json();
+        
+        console.log(`Balance response for ${accountType}:`, result);
+        
+        // Hide loading
+        if (loadingEl) loadingEl.style.display = 'none';
+        
+        if (result.success && result.balance) {
+            const balance = result.balance;
+            
+            // Display balance information
+            const accountIdEl = document.getElementById(`${accountType}-account-id`);
+            const cashBalanceEl = document.getElementById(`${accountType}-cash-balance`);
+            const buyingPowerEl = document.getElementById(`${accountType}-buying-power`);
+            const equityEl = document.getElementById(`${accountType}-equity`);
+            
+            if (accountIdEl) accountIdEl.textContent = balance.account_id || '-';
+            
+            // Format currency values
+            const formatCurrency = (value) => {
+                if (value === 'N/A' || value === null || value === undefined || value === '') return 'N/A';
+                const num = parseFloat(value);
+                if (isNaN(num)) return String(value);
+                return '$' + num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            };
+            
+            const cashFormatted = formatCurrency(balance.balance);
+            const buyingPowerFormatted = formatCurrency(balance.buying_power);
+            const equityFormatted = formatCurrency(balance.equity);
+            
+            console.log(`Formatted values - Cash: ${cashFormatted}, Buying Power: ${buyingPowerFormatted}, Equity: ${equityFormatted}`);
+            
+            if (cashBalanceEl) {
+                cashBalanceEl.textContent = cashFormatted;
+                console.log(`✓ Set cash balance element`);
+            } else {
+                console.error(`Cash balance element not found for ${accountType}`);
+            }
+            if (buyingPowerEl) {
+                buyingPowerEl.textContent = buyingPowerFormatted;
+                console.log(`✓ Set buying power element`);
+            } else {
+                console.error(`Buying power element not found for ${accountType}`);
+            }
+            if (equityEl) {
+                equityEl.textContent = equityFormatted;
+                console.log(`✓ Set equity element`);
+            } else {
+                console.error(`Equity element not found for ${accountType}`);
+            }
+            
+            // Show balance data and hide error
+            if (dataEl) {
+                dataEl.style.display = 'grid';
+                console.log(`✓ Showing balance data grid for ${accountType}`);
+            } else {
+                console.error(`Balance data element not found for ${accountType}`);
+            }
+            if (errorEl) errorEl.style.display = 'none';
+            
+            // Ensure balance section is visible
+            balanceSection.style.display = 'block';
+            balanceSection.style.visibility = 'visible';
+            console.log(`✓ Balance card displayed for ${accountType} with data:`, balance);
+        } else {
+            // Show error message
+            if (errorTextEl) {
+                errorTextEl.textContent = result.message || 'Unable to fetch balance';
+            }
+            if (errorEl) errorEl.style.display = 'block';
+            if (dataEl) dataEl.style.display = 'none';
+            
+            // Still show the card even with error
+            balanceSection.style.display = 'block';
+            console.error(`Error fetching ${accountType} balance:`, result.message);
+        }
+    } catch (error) {
+        console.error(`Error fetching ${accountType} balance:`, error);
+        
+        // Hide loading, show error
+        if (loadingEl) loadingEl.style.display = 'none';
+        if (errorTextEl) {
+            errorTextEl.textContent = 'Network error: ' + error.message;
+        }
+        if (errorEl) errorEl.style.display = 'block';
+        if (dataEl) dataEl.style.display = 'none';
+        
+        // Still show the card even with error
+        balanceSection.style.display = 'block';
+    }
+}
+
+// Load balances on page load if accounts are logged in
+document.addEventListener('DOMContentLoaded', function() {
+    // Always show balance cards
+    const masterCard = document.getElementById('master-balance-section');
+    const clientCard = document.getElementById('client-balance-section');
+    if (masterCard) masterCard.style.display = 'block';
+    if (clientCard) clientCard.style.display = 'block';
+    
+    // Small delay to ensure DOM is fully ready
+    setTimeout(function() {
+        // Check if master account is logged in and load balance
+        {% if login_status.master.logged_in %}
+        refreshBalance('master');
+        {% else %}
+        // Show message that login is required
+        const masterErrorEl = document.getElementById('master-balance-error');
+        const masterErrorTextEl = document.getElementById('master-balance-error-text');
+        if (masterErrorEl && masterErrorTextEl) {
+            masterErrorTextEl.textContent = 'Please log in to view balance';
+            masterErrorEl.style.display = 'block';
+        }
+        {% endif %}
+        
+        // Check if client account is logged in and load balance
+        {% if login_status.client.logged_in %}
+        refreshBalance('client');
+        {% else %}
+        // Show message that login is required
+        const clientErrorEl = document.getElementById('client-balance-error');
+        const clientErrorTextEl = document.getElementById('client-balance-error-text');
+        if (clientErrorEl && clientErrorTextEl) {
+            clientErrorTextEl.textContent = 'Please log in to view balance';
+            clientErrorEl.style.display = 'block';
+        }
+        {% endif %}
+    }, 300);
+});
 
 // Start/Stop copier
 async function startCopier() {
@@ -336,6 +659,20 @@ function showMessage(text, type) {
     }, 3000);
 }
 
+// Toggle password visibility
+function togglePassword(inputId) {
+    const input = document.getElementById(inputId);
+    const button = input.nextElementSibling;
+    const eyeIcon = button.querySelector('.eye-icon');
+    
+    if (input.type === 'password') {
+        input.type = 'text';
+        eyeIcon.textContent = '🙈';
+    } else {
+        input.type = 'password';
+        eyeIcon.textContent = '👁️';
+    }
+}
 
 // Check copier status periodically
 setInterval(async function() {

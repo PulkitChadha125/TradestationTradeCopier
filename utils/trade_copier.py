@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from utils.tradestation_api import TradeStationAPI
 
 class TradeCopier:
@@ -9,31 +9,39 @@ class TradeCopier:
         self.running = False
         self.master_api = None
         self.client_api = None
-        self.last_positions = {}
+        self.processed_order_ids = set()  # Track processed orders
         self.order_counter = 0
+        self.start_time = datetime.now()
         
         # Initialize APIs
-        if settings.get('master', {}).get('client_id'):
+        global_settings = settings.get('global', {})
+        master_settings = settings.get('master', {})
+        client_settings = settings.get('client', {})
+        
+        if global_settings.get('api_key') and master_settings.get('refresh_token'):
             self.master_api = TradeStationAPI(
-                client_id=settings['master']['client_id'],
-                client_secret=settings['master']['client_secret'],
-                account_id=settings['master'].get('account_id', ''),
-                environment=settings['master'].get('environment', 'paper'),
-                refresh_token=settings['master'].get('refresh_token', '')
+                client_id=global_settings['api_key'],
+                client_secret=global_settings['api_secret'],
+                account_id=master_settings.get('account_id', ''),
+                environment=master_settings.get('environment', 'paper'),
+                refresh_token=master_settings.get('refresh_token', '')
             )
         
-        if settings.get('client', {}).get('client_id'):
+        if global_settings.get('api_key') and client_settings.get('refresh_token'):
             self.client_api = TradeStationAPI(
-                client_id=settings['client']['client_id'],
-                client_secret=settings['client']['client_secret'],
-                account_id=settings['client'].get('account_id', ''),
-                environment=settings['client'].get('environment', 'paper'),
-                refresh_token=settings['client'].get('refresh_token', '')
+                client_id=global_settings['api_key'],
+                client_secret=global_settings['api_secret'],
+                account_id=client_settings.get('account_id', ''),
+                environment=client_settings.get('environment', 'paper'),
+                refresh_token=client_settings.get('refresh_token', '')
             )
     
     def start(self):
-        """Start monitoring and copying trades"""
+        """Start monitoring and copying orders"""
         self.running = True
+        self.start_time = datetime.now()
+        
+        print("Trade copier started. Monitoring master account orders...")
         
         while self.running:
             try:
@@ -41,40 +49,40 @@ class TradeCopier:
                     time.sleep(5)
                     continue
                 
-                # Get current master positions
-                master_positions = self.master_api.get_positions()
+                # Get orders from master account (only new orders since start time)
+                # Format: YYYY-MM-DD
+                since_date = self.start_time.strftime('%Y-%m-%d')
                 
-                # Convert to dict for easier comparison
-                current_positions = {}
-                for pos in master_positions:
-                    symbol = pos.get('Symbol', '')
-                    quantity = pos.get('Quantity', 0)
-                    if symbol:
-                        current_positions[symbol] = quantity
-                
-                # Compare with last known positions
-                for symbol, quantity in current_positions.items():
-                    last_quantity = self.last_positions.get(symbol, 0)
+                try:
+                    # Get current orders (active + today's orders)
+                    current_orders = self.master_api.get_orders()
                     
-                    if quantity != last_quantity:
-                        # Position changed, calculate difference
-                        diff = quantity - last_quantity
-                        
-                        if diff != 0:
-                            # Copy trade to client account
-                            self.copy_trade(symbol, diff)
+                    # Also get historical orders from today
+                    historical_orders = self.master_api.get_historical_orders(since_date=since_date)
+                    
+                    # Combine and deduplicate
+                    all_orders = {}
+                    for order in current_orders:
+                        order_id = order.get('OrderID') or order.get('ID') or str(order)
+                        if order_id:
+                            all_orders[order_id] = order
+                    
+                    for order in historical_orders:
+                        order_id = order.get('OrderID') or order.get('ID') or str(order)
+                        if order_id:
+                            all_orders[order_id] = order
+                    
+                    # Process only new orders (not in processed_order_ids)
+                    for order_id, order in all_orders.items():
+                        if order_id not in self.processed_order_ids:
+                            # This is a new order, copy it to client account
+                            self.process_new_order(order, order_id)
+                            self.processed_order_ids.add(order_id)
                 
-                # Update last positions
-                self.last_positions = current_positions.copy()
-                
-                # Check for positions that were closed
-                for symbol, last_quantity in self.last_positions.items():
-                    if symbol not in current_positions and last_quantity != 0:
-                        # Position was closed, close it in client account too
-                        self.copy_trade(symbol, -last_quantity)
-                
-                # Update last positions again after closing
-                self.last_positions = current_positions.copy()
+                except Exception as e:
+                    print(f"Error fetching orders: {e}")
+                    time.sleep(5)
+                    continue
                 
                 # Sleep before next check
                 time.sleep(2)  # Check every 2 seconds
@@ -83,8 +91,45 @@ class TradeCopier:
                 print(f"Error in trade copier: {e}")
                 time.sleep(5)
     
-    def copy_trade(self, symbol, quantity):
-        """Copy a trade from master to client account"""
+    def process_new_order(self, order, order_id):
+        """Process a new order from master account and copy to client"""
+        if not self.master_api or not self.client_api:
+            return
+        
+        try:
+            # Extract order details
+            symbol = order.get('Symbol', '')
+            quantity = order.get('Quantity', 0)
+            trade_action = order.get('TradeAction', '')
+            order_type = order.get('OrderType', 'Market')
+            limit_price = order.get('LimitPrice')
+            
+            if not symbol or quantity == 0:
+                print(f"Skipping order {order_id}: Invalid symbol or quantity")
+                return
+            
+            # Determine side based on TradeAction
+            if trade_action.upper() in ['BUY', 'BUYTOCOVER']:
+                side = 'BUY'
+                qty = abs(quantity)
+            elif trade_action.upper() in ['SELL', 'SELLSHORT']:
+                side = 'SELL'
+                qty = -abs(quantity)
+            else:
+                # Try to infer from quantity
+                qty = quantity
+                side = 'BUY' if quantity > 0 else 'SELL'
+            
+            print(f"Processing new order: {symbol} {side} {abs(qty)} (Order ID: {order_id})")
+            
+            # Copy order to client account
+            self.copy_order(symbol, qty, side, order_type, limit_price, order_id)
+            
+        except Exception as e:
+            print(f"Error processing order {order_id}: {e}")
+    
+    def copy_order(self, symbol, quantity, side, order_type='Market', price=None, master_order_id=None):
+        """Copy an order from master to client account"""
         if not self.master_api or not self.client_api:
             return
         
@@ -96,8 +141,9 @@ class TradeCopier:
         client_result = self.client_api.place_order(
             symbol=symbol,
             quantity=quantity,
-            side='BUY' if quantity > 0 else 'SELL',
-            order_type='Market'
+            side=side,
+            order_type=order_type,
+            price=price
         )
         
         # Calculate latencies
@@ -124,10 +170,11 @@ class TradeCopier:
         order_data = {
             'timestamp': datetime.now().isoformat(),
             'order_id': order_id,
+            'master_order_id': master_order_id or '',
             'symbol': symbol,
             'quantity': abs(quantity),
-            'side': 'BUY' if quantity > 0 else 'SELL',
-            'order_type': 'Market',
+            'side': side,
+            'order_type': order_type,
             'master_request_time': master_request_time,
             'master_response_time': master_response_time,
             'master_latency': f"{master_latency:.2f}",
@@ -144,3 +191,4 @@ class TradeCopier:
     def stop(self):
         """Stop the trade copier"""
         self.running = False
+        print("Trade copier stopped.")

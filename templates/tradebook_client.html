@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="positions-container">
+    <h2>TradeBook Client</h2>
+    <button onclick="refreshOrders()" class="btn btn-secondary">Refresh</button>
+    
+    {% if error %}
+    <div class="error-message">
+        <p>Error loading orders: {{ error }}</p>
+    </div>
+    {% elif orders %}
+    <table class="positions-table">
+        <thead>
+            <tr>
+                <th>Order ID</th>
+                <th>Symbol</th>
+                <th>Quantity</th>
+                <th>Side</th>
+                <th>Order Type</th>
+                <th>Status</th>
+                <th>Price</th>
+                <th>Time</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for order in orders %}
+            <tr>
+                <td>{{ order.get('OrderID', order.get('ID', 'N/A')) }}</td>
+                <td>{{ order.get('Symbol', 'N/A') }}</td>
+                <td class="{% if order.get('Quantity', 0) > 0 %}positive{% elif order.get('Quantity', 0) < 0 %}negative{% endif %}">
+                    {{ order.get('Quantity', order.get('Qty', 0)) }}
+                </td>
+                <td>{{ order.get('TradeAction', order.get('Side', 'N/A')) }}</td>
+                <td>{{ order.get('OrderType', 'N/A') }}</td>
+                <td>{{ order.get('Status', order.get('OrderStatus', 'N/A')) }}</td>
+                <td>
+                    {% if order.get('LimitPrice') %}
+                        ${{ "%.2f"|format(order.get('LimitPrice', 0)) }}
+                    {% elif order.get('Price') %}
+                        ${{ "%.2f"|format(order.get('Price', 0)) }}
+                    {% else %}
+                        Market
+                    {% endif %}
+                </td>
+                <td>{{ order.get('TimeStamp', order.get('OrderDate', order.get('Time', 'N/A'))) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="no-data">
+        <p>No orders found. Please check your API settings and ensure the client account is logged in.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function refreshOrders() {
+    window.location.reload();
+}
+</script>
+{% endblock %}
