@@ -49,7 +49,7 @@ function checkCopierStatus() {
 }
 
 function startCopier() {
-    fetch('/api/start-copier', {
+    fetch('/api/start-trading', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'

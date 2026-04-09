@@ -4,50 +4,138 @@
 <div class="positions-container">
     <h2>Master Account Positions</h2>
     <button onclick="refreshPositions()" class="btn btn-secondary">Refresh</button>
+    <span id="live-status" style="margin-left: 10px; color: #666;">Live refresh: ON</span>
     
-    {% if error %}
     <div class="error-message">
-        <p>Error loading positions: {{ error }}</p>
+        <p id="positions-error" style="display: none;"></p>
     </div>
-    {% elif positions %}
     <table class="positions-table">
         <thead>
             <tr>
+                <th>Position ID</th>
                 <th>Symbol</th>
                 <th>Quantity</th>
                 <th>Average Price</th>
                 <th>Market Value</th>
                 <th>Unrealized P&L</th>
+                <th>Action</th>
             </tr>
         </thead>
-        <tbody>
-            {% for position in positions %}
-            <tr>
-                <td>{{ position.get('Symbol', 'N/A') }}</td>
-                <td class="{% if position.get('Quantity', 0) > 0 %}positive{% elif position.get('Quantity', 0) < 0 %}negative{% endif %}">
-                    {{ position.get('Quantity', 0) }}
-                </td>
-                <td>${{ "%.2f"|format(position.get('AveragePrice', 0)) }}</td>
-                <td>${{ "%.2f"|format(position.get('MarketValue', 0)) }}</td>
-                <td class="{% if position.get('UnrealizedPL', 0) >= 0 %}positive{% else %}negative{% endif %}">
-                    ${{ "%.2f"|format(position.get('UnrealizedPL', 0)) }}
-                </td>
-            </tr>
-            {% endfor %}
+        <tbody id="positions-tbody">
         </tbody>
     </table>
-    {% else %}
-    <div class="no-data">
-        <p>No positions found. Please check your API settings.</p>
+    <div class="no-data" id="no-positions" style="display: none;">
+        <p>No positions found.</p>
     </div>
-    {% endif %}
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
 function refreshPositions() {
-    window.location.reload();
+    loadMasterPositions();
 }
+
+function toNumber(value, fallback = 0) {
+    const n = parseFloat(value);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+function fmtMoney(value) {
+    return `$${toNumber(value, 0).toFixed(2)}`;
+}
+
+function renderPositions(positions) {
+    const tbody = document.getElementById('positions-tbody');
+    const noPositions = document.getElementById('no-positions');
+    tbody.innerHTML = '';
+
+    if (!Array.isArray(positions) || positions.length === 0) {
+        noPositions.style.display = 'block';
+        return;
+    }
+    noPositions.style.display = 'none';
+
+    positions.forEach((position) => {
+        const qty = toNumber(position.Quantity ?? position.quantity, 0);
+        const avg = toNumber(position.AveragePrice ?? position.AvgPrice, 0);
+        const marketValue = toNumber(position.MarketValue, 0);
+        const unrealized = toNumber(position.UnrealizedProfitLoss ?? position.UnrealizedPL, 0);
+        const positionId = position.PositionID || position.PositionId || position.OrderID || position.orderId || '';
+        const symbol = position.Symbol || position.symbol || 'N/A';
+        const longShort = position.LongShort || position.Side || (qty >= 0 ? 'Long' : 'Short');
+        const qtyClass = qty > 0 ? 'positive' : (qty < 0 ? 'negative' : '');
+        const pnlClass = unrealized >= 0 ? 'positive' : 'negative';
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td>${positionId || 'N/A'}</td>
+            <td>${symbol}</td>
+            <td class="${qtyClass}">${qty}</td>
+            <td>${fmtMoney(avg)}</td>
+            <td>${fmtMoney(marketValue)}</td>
+            <td class="${pnlClass}">${fmtMoney(unrealized)}</td>
+            <td><button class="btn btn-small" onclick="exitPosition('${symbol}', '${qty}', '${longShort}', '${positionId}')">Exit</button></td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+function setError(message) {
+    const errorEl = document.getElementById('positions-error');
+    if (!message) {
+        errorEl.style.display = 'none';
+        errorEl.textContent = '';
+        return;
+    }
+    errorEl.style.display = 'block';
+    errorEl.textContent = message;
+}
+
+function loadMasterPositions() {
+    fetch('/api/master-positions')
+        .then((response) => response.json())
+        .then((data) => {
+            if (!data.success) {
+                setError(data.message || 'Failed to load positions');
+                return;
+            }
+            setError('');
+            renderPositions(data.positions || []);
+        })
+        .catch((error) => {
+            setError(`Error loading positions: ${error.message}`);
+        });
+}
+
+function exitPosition(symbol, quantity, longShort, positionId) {
+    if (!confirm(`Exit position ${symbol} (Qty: ${quantity})?`)) {
+        return;
+    }
+    fetch('/api/master-position-exit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            symbol: symbol,
+            quantity: quantity,
+            long_short: longShort,
+            position_id: positionId
+        })
+    })
+    .then((response) => response.json())
+    .then((data) => {
+        if (!data.success) {
+            alert(`Exit failed: ${data.message || 'Unknown error'}`);
+            return;
+        }
+        loadMasterPositions();
+    })
+    .catch((error) => {
+        alert(`Exit failed: ${error.message}`);
+    });
+}
+
+loadMasterPositions();
+setInterval(loadMasterPositions, 1000);
 </script>
 {% endblock %}

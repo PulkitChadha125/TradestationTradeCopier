@@ -10,11 +10,16 @@
         <thead>
             <tr>
                 <th>Timestamp</th>
-                <th>Order ID</th>
+                <th>Copier Order ID</th>
+                <th>Master Order ID</th>
+                <th>Action</th>
                 <th>Symbol</th>
                 <th>Quantity</th>
                 <th>Side</th>
-                <th>Status</th>
+                <th>Map Key</th>
+                <th>Client Order ID</th>
+                <th>Master Status</th>
+                <th>Client Status</th>
                 <th>Client Latency (ms)</th>
                 <th>Actions</th>
             </tr>
@@ -23,14 +28,21 @@
             {% for order in orders %}
             <tr>
                 <td>{{ order.get('timestamp', 'N/A')[:19] }}</td>
-                <td>{{ order.get('order_id', 'N/A') }}</td>
+                <td>{{ order.get('copier_order_id', order.get('order_id', 'N/A')) }}</td>
+                <td>{{ order.get('master_order_id', 'N/A') }}</td>
+                <td>{{ order.get('action', 'N/A') }}</td>
                 <td>{{ order.get('symbol', 'N/A') }}</td>
                 <td>{{ order.get('quantity', 'N/A') }}</td>
                 <td class="{% if order.get('side') == 'BUY' %}positive{% else %}negative{% endif %}">
                     {{ order.get('side', 'N/A') }}
                 </td>
-                <td class="{% if order.get('status') == 'SUCCESS' %}success{% else %}error-status{% endif %}">
-                    {{ order.get('status', 'N/A') }}
+                <td>{{ order.get('mapping_key', 'N/A') }}</td>
+                <td>{{ order.get('client_order_id', 'N/A') }}</td>
+                <td>
+                    {{ order.get('master_status', 'N/A') }}
+                </td>
+                <td class="{% if order.get('client_status', order.get('status')) == 'SUCCESS' %}success{% else %}error-status{% endif %}">
+                    {{ order.get('client_status', order.get('status', 'N/A')) }}
                 </td>
                 <td>{{ order.get('client_latency', 'N/A') }}</td>
                 <td>
@@ -72,12 +84,17 @@ function showOrderDetails(orderId) {
                 <div class="order-details">
                     <div class="detail-section">
                         <h4>Order Information</h4>
-                        <p><strong>Order ID:</strong> ${data.order_id || 'N/A'}</p>
+                        <p><strong>Copier Order ID:</strong> ${data.copier_order_id || data.order_id || 'N/A'}</p>
+                        <p><strong>Master Order ID:</strong> ${data.master_order_id || 'N/A'}</p>
+                        <p><strong>Action:</strong> ${data.action || 'N/A'}</p>
                         <p><strong>Symbol:</strong> ${data.symbol || 'N/A'}</p>
                         <p><strong>Quantity:</strong> ${data.quantity || 'N/A'}</p>
                         <p><strong>Side:</strong> ${data.side || 'N/A'}</p>
                         <p><strong>Order Type:</strong> ${data.order_type || 'N/A'}</p>
-                        <p><strong>Status:</strong> ${data.status || 'N/A'}</p>
+                        <p><strong>Map Key:</strong> ${data.mapping_key || 'N/A'}</p>
+                        <p><strong>Client Order ID:</strong> ${data.client_order_id || 'N/A'}</p>
+                        <p><strong>Master Status:</strong> ${data.master_status || 'N/A'}</p>
+                        <p><strong>Client Status:</strong> ${data.client_status || data.status || 'N/A'}</p>
                     </div>
                     <div class="detail-section">
                         <h4>Master Account</h4>
@@ -90,6 +107,7 @@ function showOrderDetails(orderId) {
                         <p><strong>Request Time:</strong> ${data.client_request_time || 'N/A'}</p>
                         <p><strong>Response Time:</strong> ${data.client_response_time || 'N/A'}</p>
                         <p><strong>Latency:</strong> ${data.client_latency || 'N/A'} ms</p>
+                        <p><strong>Response:</strong> ${data.client_response || 'N/A'}</p>
                     </div>
                     ${data.error ? `<div class="error-message"><p><strong>Error:</strong> ${data.error}</p></div>` : ''}
                 </div>

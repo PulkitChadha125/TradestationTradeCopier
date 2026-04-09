@@ -19,17 +19,55 @@ os.makedirs('logs', exist_ok=True)
 
 API_SETTINGS_FILE = 'data/api_settings.csv'
 ORDER_LOG_FILE = 'data/order_log.csv'
+ORDER_LOG_FIELDNAMES = [
+    'timestamp', 'order_id', 'copier_order_id', 'master_order_id', 'action', 'symbol', 'quantity', 'side', 'order_type',
+    'mapping_key', 'client_order_id', 'client_response',
+    'master_status', 'client_status',
+    'master_request_time', 'master_response_time', 'master_latency',
+    'client_request_time', 'client_response_time', 'client_latency',
+    'status', 'error'
+]
 
 # Global instances
 trade_copier = None
 copier_thread = None
 copier_running = False
+copier_lock = threading.Lock()
+order_log_lock = threading.Lock()
 
 # Login status tracking
 login_status = {
     'master': {'logged_in': False, 'error': None},
     'client': {'logged_in': False, 'error': None}
 }
+
+def ensure_order_log_file():
+    """Ensure order log CSV exists with headers for web UI table rendering."""
+    if not os.path.exists(ORDER_LOG_FILE):
+        with open(ORDER_LOG_FILE, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=ORDER_LOG_FIELDNAMES)
+            writer.writeheader()
+        return
+
+    # Migrate legacy header to current schema while preserving existing rows.
+    with open(ORDER_LOG_FILE, 'r', newline='') as f:
+        reader = csv.DictReader(f)
+        existing_fields = reader.fieldnames or []
+        if existing_fields == ORDER_LOG_FIELDNAMES:
+            return
+        rows = list(reader)
+
+    migrated_rows = []
+    for row in rows:
+        # Skip accidental duplicate header rows saved as data.
+        if row.get('timestamp') == 'timestamp':
+            continue
+        migrated_rows.append({field: row.get(field, '') for field in ORDER_LOG_FIELDNAMES})
+
+    with open(ORDER_LOG_FILE, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=ORDER_LOG_FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(migrated_rows)
 
 def load_api_settings():
     """Load API settings from CSV"""
@@ -117,16 +155,18 @@ def _write_settings_to_csv(settings):
 
 def log_order(order_data):
     """Log order to CSV"""
-    file_exists = os.path.exists(ORDER_LOG_FILE)
-    with open(ORDER_LOG_FILE, 'a', newline='') as f:
-        fieldnames = ['timestamp', 'order_id', 'master_order_id', 'symbol', 'quantity', 'side', 'order_type', 
-                     'master_request_time', 'master_response_time', 'master_latency',
-                     'client_request_time', 'client_response_time', 'client_latency',
-                     'status', 'error']
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow(order_data)
+    ensure_order_log_file()
+    with order_log_lock:
+        with open(ORDER_LOG_FILE, 'a', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=ORDER_LOG_FIELDNAMES)
+            # Enforce order log action vocabulary.
+            action = (order_data.get('action') or '').strip().lower()
+            if action not in {'buy', 'buy exit', 'sell', 'sell exit'}:
+                action = 'buy' if (order_data.get('side') or '').upper() == 'BUY' else 'sell'
+            order_data['action'] = action
+            if not order_data.get('copier_order_id'):
+                order_data['copier_order_id'] = order_data.get('order_id', '')
+            writer.writerow(order_data)
 
 @app.route('/')
 def index():
@@ -321,163 +361,158 @@ def save_account_credentials_endpoint(account_type):
 
 @app.route('/master-position')
 def master_position():
+    return redirect(url_for('positions'))
+
+@app.route('/positions')
+def positions():
+    return render_template('positions.html')
+
+@app.route('/api/master-positions', methods=['GET'])
+def api_master_positions():
+    """Live master positions for dynamic UI refresh."""
     settings = load_api_settings()
-    positions = []
-    error = None
-    
     global_settings = settings.get('global', {})
     master_settings = settings.get('master', {})
-    
-    if global_settings.get('api_key') and master_settings.get('refresh_token'):
-        try:
-            api = TradeStationAPI(
-                client_id=global_settings['api_key'],
-                client_secret=global_settings['api_secret'],
-                account_id=master_settings.get('account_id', ''),
-                environment=master_settings.get('environment', 'paper'),
-                refresh_token=master_settings.get('refresh_token', '')
+
+    if not global_settings.get('api_key') or not global_settings.get('api_secret'):
+        return jsonify({'success': False, 'message': 'Global API credentials not configured'}), 400
+    if not master_settings.get('refresh_token'):
+        return jsonify({'success': False, 'message': 'Master account not logged in'}), 400
+
+    try:
+        api = TradeStationAPI(
+            client_id=global_settings['api_key'],
+            client_secret=global_settings['api_secret'],
+            account_id=master_settings.get('account_id', ''),
+            environment=master_settings.get('environment', 'paper'),
+            refresh_token=master_settings.get('refresh_token', '')
+        )
+        positions = api.get_positions()
+        return jsonify({'success': True, 'positions': positions})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/master-position-exit', methods=['POST'])
+def api_master_position_exit():
+    """Exit a specific master position selected from live positions table."""
+    settings = load_api_settings()
+    global_settings = settings.get('global', {})
+    master_settings = settings.get('master', {})
+
+    if not global_settings.get('api_key') or not global_settings.get('api_secret'):
+        return jsonify({'success': False, 'message': 'Global API credentials not configured'}), 400
+    if not master_settings.get('refresh_token'):
+        return jsonify({'success': False, 'message': 'Master account not logged in'}), 400
+
+    payload = request.get_json() or {}
+    symbol = payload.get('symbol')
+    quantity = payload.get('quantity')
+    long_short = str(payload.get('long_short', '')).upper()
+    position_id = payload.get('position_id')
+
+    if not symbol or quantity is None:
+        return jsonify({'success': False, 'message': 'symbol and quantity are required'}), 400
+
+    try:
+        qty = int(float(quantity))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'message': 'Invalid quantity'}), 400
+
+    if qty == 0:
+        return jsonify({'success': False, 'message': 'Quantity is zero'}), 400
+
+    # Opposite-side market order to close selected position.
+    if long_short == 'SHORT' or qty < 0:
+        close_qty = abs(qty)      # BUY to cover short
+    else:
+        close_qty = -abs(qty)     # SELL to close long
+
+    try:
+        api = TradeStationAPI(
+            client_id=global_settings['api_key'],
+            client_secret=global_settings['api_secret'],
+            account_id=master_settings.get('account_id', ''),
+            environment=master_settings.get('environment', 'paper'),
+            refresh_token=master_settings.get('refresh_token', '')
+        )
+        result = api.place_order(
+            symbol=symbol,
+            quantity=close_qty,
+            side='BUY' if close_qty > 0 else 'SELL',
+            order_type='Market'
+        )
+        if result.get('success'):
+            print(
+                f"[MASTER EXIT] Closed position request successful: "
+                f"position_id={position_id}, symbol={symbol}, quantity={quantity}"
             )
-            positions = api.get_positions()
-        except Exception as e:
-            error = str(e)
-    
-    return render_template('master_position.html', positions=positions, error=error)
+            return jsonify({'success': True, 'result': result})
+
+        error_msg = result.get('error', 'Unknown error')
+        print(
+            f"[MASTER EXIT] Close failed: position_id={position_id}, symbol={symbol}, "
+            f"quantity={quantity}, error={error_msg}"
+        )
+        return jsonify({'success': False, 'message': error_msg}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/client-position')
 def client_position():
+    return redirect(url_for('positions'))
+
+@app.route('/api/client-positions', methods=['GET'])
+def api_client_positions():
+    """Live client positions for dynamic UI refresh."""
     settings = load_api_settings()
-    positions = []
-    error = None
-    
     global_settings = settings.get('global', {})
     client_settings = settings.get('client', {})
-    
-    if global_settings.get('api_key') and client_settings.get('refresh_token'):
-        try:
-            api = TradeStationAPI(
-                client_id=global_settings['api_key'],
-                client_secret=global_settings['api_secret'],
-                account_id=client_settings.get('account_id', ''),
-                environment=client_settings.get('environment', 'paper'),
-                refresh_token=client_settings.get('refresh_token', '')
-            )
-            positions = api.get_positions()
-        except Exception as e:
-            error = str(e)
-    
-    return render_template('client_position.html', positions=positions, error=error)
+
+    if not global_settings.get('api_key') or not global_settings.get('api_secret'):
+        return jsonify({'success': False, 'message': 'Global API credentials not configured'}), 400
+    if not client_settings.get('refresh_token'):
+        return jsonify({'success': False, 'message': 'Client account not logged in'}), 400
+
+    try:
+        api = TradeStationAPI(
+            client_id=global_settings['api_key'],
+            client_secret=global_settings['api_secret'],
+            account_id=client_settings.get('account_id', ''),
+            environment=client_settings.get('environment', 'paper'),
+            refresh_token=client_settings.get('refresh_token', '')
+        )
+        positions = api.get_positions()
+        return jsonify({'success': True, 'positions': positions})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/order-log')
 def order_log():
+    ensure_order_log_file()
     orders = []
-    if os.path.exists(ORDER_LOG_FILE):
-        with open(ORDER_LOG_FILE, 'r', newline='') as f:
-            reader = csv.DictReader(f)
-            orders = list(reader)
+    with open(ORDER_LOG_FILE, 'r', newline='') as f:
+        reader = csv.DictReader(f)
+        orders = list(reader)
     # Reverse to show newest first
     orders.reverse()
     return render_template('order_log.html', orders=orders)
 
 @app.route('/tradebook-master')
 def tradebook_master():
-    """Display all orders for master account"""
-    settings = load_api_settings()
-    orders = []
-    error = None
-    
-    global_settings = settings.get('global', {})
-    master_settings = settings.get('master', {})
-    
-    if global_settings.get('api_key') and master_settings.get('refresh_token'):
-        try:
-            api = TradeStationAPI(
-                client_id=global_settings['api_key'],
-                client_secret=global_settings['api_secret'],
-                account_id=master_settings.get('account_id', ''),
-                environment=master_settings.get('environment', 'paper'),
-                refresh_token=master_settings.get('refresh_token', '')
-            )
-            # Get all orders (both current and historical)
-            try:
-                orders = api.get_orders()
-            except:
-                orders = []
-            
-            # Also try to get historical orders
-            try:
-                historical_orders = api.get_historical_orders()
-                if historical_orders:
-                    # Combine and deduplicate by OrderID
-                    order_ids = {order.get('OrderID') for order in orders if order.get('OrderID')}
-                    for hist_order in historical_orders:
-                        if hist_order.get('OrderID') not in order_ids:
-                            orders.append(hist_order)
-                            order_ids.add(hist_order.get('OrderID'))
-            except:
-                pass
-            
-            # Sort by date (newest first)
-            if orders:
-                orders.sort(key=lambda x: x.get('TimeStamp', x.get('OrderDate', '')), reverse=True)
-        except Exception as e:
-            error = str(e)
-    
-    return render_template('tradebook_master.html', orders=orders, error=error)
+    return redirect(url_for('order_log'))
 
 @app.route('/tradebook-client')
 def tradebook_client():
-    """Display all orders for client account"""
-    settings = load_api_settings()
-    orders = []
-    error = None
-    
-    global_settings = settings.get('global', {})
-    client_settings = settings.get('client', {})
-    
-    if global_settings.get('api_key') and client_settings.get('refresh_token'):
-        try:
-            api = TradeStationAPI(
-                client_id=global_settings['api_key'],
-                client_secret=global_settings['api_secret'],
-                account_id=client_settings.get('account_id', ''),
-                environment=client_settings.get('environment', 'paper'),
-                refresh_token=client_settings.get('refresh_token', '')
-            )
-            # Get all orders (both current and historical)
-            try:
-                orders = api.get_orders()
-            except:
-                orders = []
-            
-            # Also try to get historical orders
-            try:
-                historical_orders = api.get_historical_orders()
-                if historical_orders:
-                    # Combine and deduplicate by OrderID
-                    order_ids = {order.get('OrderID') for order in orders if order.get('OrderID')}
-                    for hist_order in historical_orders:
-                        if hist_order.get('OrderID') not in order_ids:
-                            orders.append(hist_order)
-                            order_ids.add(hist_order.get('OrderID'))
-            except:
-                pass
-            
-            # Sort by date (newest first)
-            if orders:
-                orders.sort(key=lambda x: x.get('TimeStamp', x.get('OrderDate', '')), reverse=True)
-        except Exception as e:
-            error = str(e)
-    
-    return render_template('tradebook_client.html', orders=orders, error=error)
+    return redirect(url_for('order_log'))
 
 @app.route('/api/order-details/<order_id>')
 def order_details(order_id):
     """Get detailed order information"""
+    ensure_order_log_file()
     orders = []
-    if os.path.exists(ORDER_LOG_FILE):
-        with open(ORDER_LOG_FILE, 'r', newline='') as f:
-            reader = csv.DictReader(f)
-            orders = list(reader)
+    with open(ORDER_LOG_FILE, 'r', newline='') as f:
+        reader = csv.DictReader(f)
+        orders = list(reader)
     
     order = next((o for o in orders if o.get('order_id') == order_id), None)
     if order:
@@ -487,40 +522,40 @@ def order_details(order_id):
 @app.route('/api/start-copier', methods=['POST'])
 def start_copier():
     global trade_copier, copier_thread, copier_running
-    
-    if copier_running:
-        return jsonify({'success': False, 'message': 'Copier is already running'})
-    
-    settings = load_api_settings()
-    global_settings = settings.get('global', {})
-    master_settings = settings.get('master', {})
-    client_settings = settings.get('client', {})
-    
-    if not global_settings.get('api_key'):
-        return jsonify({'success': False, 'message': 'Please configure global API credentials'})
-    if not master_settings.get('refresh_token') or not client_settings.get('refresh_token'):
-        return jsonify({'success': False, 'message': 'Please login to both master and client accounts first'})
-    
-    try:
-        trade_copier = TradeCopier(settings, log_order)
-        copier_thread = threading.Thread(target=trade_copier.start, daemon=True)
-        copier_thread.start()
-        copier_running = True
-        return jsonify({'success': True, 'message': 'Trade copier started'})
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)})
+    with copier_lock:
+        if copier_running:
+            return jsonify({'success': False, 'message': 'Copier is already running'})
+        
+        settings = load_api_settings()
+        global_settings = settings.get('global', {})
+        master_settings = settings.get('master', {})
+        client_settings = settings.get('client', {})
+        
+        if not global_settings.get('api_key'):
+            return jsonify({'success': False, 'message': 'Please configure global API credentials'})
+        if not master_settings.get('refresh_token') or not client_settings.get('refresh_token'):
+            return jsonify({'success': False, 'message': 'Please login to both master and client accounts first'})
+        
+        try:
+            trade_copier = TradeCopier(settings, log_order)
+            copier_thread = threading.Thread(target=trade_copier.start, daemon=True)
+            copier_thread.start()
+            copier_running = True
+            return jsonify({'success': True, 'message': 'Trade copier started'})
+        except Exception as e:
+            return jsonify({'success': False, 'message': str(e)})
 
 @app.route('/api/stop-copier', methods=['POST'])
 def stop_copier():
     global trade_copier, copier_running
-    
-    if not copier_running:
-        return jsonify({'success': False, 'message': 'Copier is not running'})
-    
-    if trade_copier:
-        trade_copier.stop()
-    copier_running = False
-    return jsonify({'success': True, 'message': 'Trade copier stopped'})
+    with copier_lock:
+        if not copier_running:
+            return jsonify({'success': False, 'message': 'Copier is not running'})
+        
+        if trade_copier:
+            trade_copier.stop()
+        copier_running = False
+        return jsonify({'success': True, 'message': 'Trade copier stopped'})
 
 @app.route('/api/copier-status')
 def copier_status():
@@ -559,6 +594,7 @@ def exchange_code_for_token(account_type):
     
     settings = load_api_settings()
     global_settings = settings.get('global', {})
+    account_settings = settings.get(account_type, {})
     api_key = global_settings.get('api_key', '')
     api_secret = global_settings.get('api_secret', '')
     
@@ -605,40 +641,35 @@ def exchange_code_for_token(account_type):
                 error_msg = e.response.text[:200] or str(e)
         return jsonify({'success': False, 'message': f'Error exchanging code: {error_msg}'})
 
-@app.route('/api/login/<account_type>', methods=['POST'])
-def login_account(account_type):
-    """Login to master or client account using Selenium automation"""
+def _perform_account_login(account_type):
+    """Shared account login logic used by single and combined start flows."""
     global login_status
-    
-    if account_type not in ['master', 'client']:
-        return jsonify({'success': False, 'message': 'Invalid account type'}), 400
-    
+
     settings = load_api_settings()
     global_settings = settings.get('global', {})
     account_settings = settings.get(account_type, {})
-    
+
     api_key = global_settings.get('api_key', '')
     api_secret = global_settings.get('api_secret', '')
     user_id = account_settings.get('user_id', '')
     password = account_settings.get('password', '')
     totp = account_settings.get('totp', '')
-    
+
     if not api_key or not api_secret:
         login_status[account_type] = {'logged_in': False, 'error': 'Global API credentials not configured'}
-        return jsonify({'success': False, 'message': 'Please configure global API credentials first'})
-    
+        return {'success': False, 'message': 'Please configure global API credentials first'}
+
     if not user_id or not password:
         login_status[account_type] = {'logged_in': False, 'error': 'Account credentials not configured'}
-        return jsonify({'success': False, 'message': f'Please configure {account_type} User ID and Password first'})
-    
+        return {'success': False, 'message': f'Please configure {account_type} User ID and Password first'}
+
     if not totp:
         login_status[account_type] = {'logged_in': False, 'error': 'TOTP secret not configured'}
-        return jsonify({'success': False, 'message': f'Please configure {account_type} TOTP secret first'})
-    
+        return {'success': False, 'message': f'Please configure {account_type} TOTP secret first'}
+
     try:
         print(f"Starting Selenium automation for {account_type} account...")
-        
-        # Generate OAuth URL
+
         oauth_url = (
             f"https://signin.tradestation.com/authorize?"
             f"response_type=code&"
@@ -647,71 +678,29 @@ def login_account(account_type):
             f"redirect_uri=http%3A%2F%2Flocalhost%3A3000&"
             f"scope=openid%20MarketData%20profile%20ReadAccount%20Trade%20offline_access%20Matrix%20OptionSpreads"
         )
-        
-        print(f"OAuth URL generated: {oauth_url[:50]}...")
-        print(f"User ID: {user_id}, Password: {'*' * len(password)}, TOTP: {totp[:10]}...")
-        
-        # Use Selenium to automate OAuth flow
+
         oauth_automation = OAuthAutomation(user_id, password, totp)
         try:
-            print("Opening Chrome browser with Selenium...")
             code = oauth_automation.automate_oauth_login(oauth_url)
-            
             if not code:
                 raise Exception("Failed to obtain authorization code")
-            
-            print(f"Successfully obtained authorization code: {code[:20]}...")
-        except Exception as e:
-            print(f"Error in Selenium automation: {e}")
-            raise
         finally:
-            # Close browser after getting code
-            print("Closing browser...")
             oauth_automation.close()
-        
-        # Exchange code for refresh token
-        print(f"\n{'='*60}")
-        print(f"[{account_type.upper()}] STEP 1: Exchanging authorization code for tokens")
-        print(f"{'='*60}")
-        print(f"[{account_type.upper()}] Authorization code: {code[:20]}...")
-        print(f"[{account_type.upper()}] Token endpoint: https://signin.tradestation.com/oauth/token")
-        print(f"[{account_type.upper()}] Making POST request...")
-        
+
         url = "https://signin.tradestation.com/oauth/token"
         payload = f'grant_type=authorization_code&client_id={api_key}&client_secret={api_secret}&code={code}&redirect_uri=http%3A%2F%2Flocalhost%3A3000'
         headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-        
         response = requests.post(url, headers=headers, data=payload, timeout=10)
-        print(f"[{account_type.upper()}] Response status: {response.status_code}")
-        
         response.raise_for_status()
         token_data = response.json()
-        
-        print(f"[{account_type.upper()}] Token response keys: {list(token_data.keys())}")
-        print(f"[{account_type.upper()}] Full token response: {json.dumps(token_data, indent=2)}")
-        
+
         refresh_token = token_data.get('refresh_token')
-        access_token = token_data.get('access_token')
-        
         if not refresh_token:
             raise Exception("No refresh token in response")
-        
-        print(f"[{account_type.upper()}] ✓ Refresh token obtained: {refresh_token[:20]}...")
-        print(f"[{account_type.upper()}] ✓ Access token obtained: {access_token[:20] if access_token else 'None'}...")
-        print(f"{'='*60}\n")
-        
-        # Save refresh token
+
         account_settings['refresh_token'] = refresh_token
         environment = account_settings.get('environment', 'paper')
-        
-        # Test authentication and get account info
-        print(f"\n{'='*60}")
-        print(f"[{account_type.upper()}] STEP 2: Testing authentication with refresh token")
-        print(f"{'='*60}")
-        print(f"[{account_type.upper()}] Creating TradeStationAPI instance...")
-        print(f"[{account_type.upper()}] Environment: {environment}")
-        print(f"[{account_type.upper()}] Account ID (before): {account_settings.get('account_id', 'NOT SET')}")
-        
+
         api = TradeStationAPI(
             client_id=api_key,
             client_secret=api_secret,
@@ -719,65 +708,108 @@ def login_account(account_type):
             environment=environment,
             refresh_token=refresh_token
         )
-        
-        print(f"[{account_type.upper()}] Calling api.authenticate()...")
         api.authenticate()
-        print(f"[{account_type.upper()}] ✓ Authentication successful")
-        print(f"[{account_type.upper()}] Access token after auth: {api.access_token[:20] if api.access_token else 'None'}...")
-        
-        print(f"[{account_type.upper()}] Getting account info...")
         accounts = api.get_account_info()
-        print(f"[{account_type.upper()}] Account info response type: {type(accounts)}")
-        print(f"[{account_type.upper()}] Account info: {json.dumps(accounts, indent=2) if isinstance(accounts, (dict, list)) else accounts}")
-        print(f"[{account_type.upper()}] ✓ Retrieved account information")
-        print(f"{'='*60}\n")
-        
-        # Auto-detect account_id if not set
-        if not account_settings.get('account_id'):
-            detected_account_id = None
-            
-            # Handle different response formats
-            if isinstance(accounts, dict) and 'Accounts' in accounts:
-                # Response format: {"Accounts": [{"AccountID": "...", ...}, ...]}
-                accounts_list = accounts['Accounts']
-                if isinstance(accounts_list, list) and len(accounts_list) > 0:
-                    # Prefer Margin account over Futures, or take first one
-                    for acc in accounts_list:
-                        if acc.get('AccountType') == 'Margin':
-                            detected_account_id = acc.get('AccountID')
-                            break
-                    # If no Margin account found, take first one
-                    if not detected_account_id and len(accounts_list) > 0:
-                        detected_account_id = accounts_list[0].get('AccountID')
-            elif isinstance(accounts, list) and len(accounts) > 0:
-                # Response format: [{"AccountID": "...", ...}, ...]
-                for acc in accounts:
-                    if acc.get('AccountType') == 'Margin':
-                        detected_account_id = acc.get('AccountID')
-                        break
-                if not detected_account_id:
-                    detected_account_id = accounts[0].get('AccountID')
-            elif isinstance(accounts, dict):
-                # Response format: {"AccountID": "...", ...}
-                detected_account_id = accounts.get('AccountID') or accounts.get('Account') or accounts.get('AccountKey', '')
-            
-            if detected_account_id:
-                account_settings['account_id'] = detected_account_id
-                account_settings['environment'] = environment
-                print(f"[{account_type.upper()}] ✓ Auto-detected Account ID: {detected_account_id}")
-            else:
-                print(f"[{account_type.upper()}] ⚠ Could not auto-detect Account ID from response")
-        
-        # Save all account settings
+
+        accounts_list = []
+        if isinstance(accounts, dict) and isinstance(accounts.get('Accounts'), list):
+            accounts_list = accounts.get('Accounts', [])
+        elif isinstance(accounts, list):
+            accounts_list = accounts
+        elif isinstance(accounts, dict):
+            accounts_list = [accounts]
+
+        available_account_ids = []
+        for acc in accounts_list:
+            if isinstance(acc, dict):
+                acc_id = acc.get('AccountID') or acc.get('Account') or acc.get('AccountKey')
+                if acc_id:
+                    available_account_ids.append(acc_id)
+
+        detected_account_id = None
+        for acc in accounts_list:
+            if isinstance(acc, dict) and acc.get('AccountType') == 'Margin':
+                detected_account_id = acc.get('AccountID') or acc.get('Account') or acc.get('AccountKey')
+                if detected_account_id:
+                    break
+        if not detected_account_id and available_account_ids:
+            detected_account_id = available_account_ids[0]
+
+        current_account_id = account_settings.get('account_id', '')
+        if not current_account_id and detected_account_id:
+            account_settings['account_id'] = detected_account_id
+        elif available_account_ids and current_account_id not in available_account_ids:
+            account_settings['account_id'] = detected_account_id or current_account_id
+
+        account_settings['environment'] = environment
         save_account_credentials(account_type, account_settings)
-        
+
         login_status[account_type] = {'logged_in': True, 'error': None}
-        return jsonify({'success': True, 'message': f'{account_type.capitalize()} account logged in successfully'})
-        
+        return {'success': True, 'message': f'{account_type.capitalize()} account logged in successfully'}
     except Exception as e:
         error_msg = str(e)
         login_status[account_type] = {'logged_in': False, 'error': error_msg}
-        return jsonify({'success': False, 'message': f'Login failed: {error_msg}'})
+        return {'success': False, 'message': f'Login failed: {error_msg}'}
+
+@app.route('/api/login/<account_type>', methods=['POST'])
+def login_account(account_type):
+    """Login to master or client account using Selenium automation."""
+    if account_type not in ['master', 'client']:
+        return jsonify({'success': False, 'message': 'Invalid account type'}), 400
+    result = _perform_account_login(account_type)
+    return jsonify(result)
+
+@app.route('/api/start-trading', methods=['POST'])
+def start_trading():
+    """
+    One-click flow:
+    1) login master
+    2) login client
+    3) start copier
+    """
+    global trade_copier, copier_thread, copier_running
+    with copier_lock:
+        if copier_running:
+            return jsonify({'success': False, 'message': 'Copier is already running'})
+
+        master_result = _perform_account_login('master')
+        if not master_result.get('success'):
+            return jsonify({
+                'success': False,
+                'message': f"Master login failed: {master_result.get('message')}",
+                'master_logged_in': bool(login_status.get('master', {}).get('logged_in')),
+                'client_logged_in': bool(login_status.get('client', {}).get('logged_in'))
+            })
+
+        client_result = _perform_account_login('client')
+        if not client_result.get('success'):
+            return jsonify({
+                'success': False,
+                'message': f"Client login failed: {client_result.get('message')}",
+                'master_logged_in': bool(login_status.get('master', {}).get('logged_in')),
+                'client_logged_in': bool(login_status.get('client', {}).get('logged_in'))
+            })
+
+        settings = load_api_settings()
+        try:
+            trade_copier = TradeCopier(settings, log_order)
+            copier_thread = threading.Thread(target=trade_copier.start, daemon=True)
+            copier_thread.start()
+            copier_running = True
+            return jsonify({
+                'success': True,
+                'message': 'Master+Client login successful. Copy trading started.',
+                'master_logged_in': bool(login_status.get('master', {}).get('logged_in')),
+                'client_logged_in': bool(login_status.get('client', {}).get('logged_in'))
+            })
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'message': str(e),
+                'master_logged_in': bool(login_status.get('master', {}).get('logged_in')),
+                'client_logged_in': bool(login_status.get('client', {}).get('logged_in'))
+            })
 
 if __name__ == '__main__':
+    ensure_order_log_file()
     app.run(debug=True, host='0.0.0.0', port=5000)

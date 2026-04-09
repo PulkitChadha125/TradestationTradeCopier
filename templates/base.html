@@ -18,25 +18,13 @@
                     <span class="nav-icon">⚙️</span>
                     <span class="nav-text">API Settings</span>
                 </a>
-                <a href="{{ url_for('master_position') }}" class="nav-link {% if request.endpoint == 'master_position' %}active{% endif %}">
+                <a href="{{ url_for('positions') }}" class="nav-link {% if request.endpoint == 'positions' or request.endpoint == 'master_position' or request.endpoint == 'client_position' %}active{% endif %}">
                     <span class="nav-icon">📊</span>
-                    <span class="nav-text">Master Position</span>
-                </a>
-                <a href="{{ url_for('client_position') }}" class="nav-link {% if request.endpoint == 'client_position' %}active{% endif %}">
-                    <span class="nav-icon">📈</span>
-                    <span class="nav-text">Client Position</span>
+                    <span class="nav-text">Positions</span>
                 </a>
                 <a href="{{ url_for('order_log') }}" class="nav-link {% if request.endpoint == 'order_log' %}active{% endif %}">
                     <span class="nav-icon">📋</span>
                     <span class="nav-text">Order Log</span>
-                </a>
-                <a href="{{ url_for('tradebook_master') }}" class="nav-link {% if request.endpoint == 'tradebook_master' %}active{% endif %}">
-                    <span class="nav-icon">📖</span>
-                    <span class="nav-text">TradeBook Master</span>
-                </a>
-                <a href="{{ url_for('tradebook_client') }}" class="nav-link {% if request.endpoint == 'tradebook_client' %}active{% endif %}">
-                    <span class="nav-icon">📗</span>
-                    <span class="nav-text">TradeBook Client</span>
                 </a>
             </nav>
         </aside>

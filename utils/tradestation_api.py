@@ -77,10 +77,31 @@ class TradeStationAPI:
         }
         
         try:
+            print(f"[API][POSITIONS] Environment: {self.environment}")
+            print(f"[API][POSITIONS] Account ID: {self.account_id}")
+            print(f"[API][POSITIONS] Endpoint: {url}")
             response = requests.get(url, headers=headers, timeout=10)
             response.raise_for_status()
-            positions = response.json()
-            return positions if isinstance(positions, list) else []
+            positions_payload = response.json()
+            print(f"[API][POSITIONS] HTTP {response.status_code}")
+            print(f"[API][POSITIONS] Raw payload: {positions_payload}")
+
+            # TradeStation responses can be list or wrapped object.
+            if isinstance(positions_payload, list):
+                return positions_payload
+            if isinstance(positions_payload, dict):
+                if isinstance(positions_payload.get('Positions'), list):
+                    return positions_payload.get('Positions', [])
+                if isinstance(positions_payload.get('positions'), list):
+                    return positions_payload.get('positions', [])
+                if isinstance(positions_payload.get('Items'), list):
+                    return positions_payload.get('Items', [])
+                # Some payloads return a single position object
+                if positions_payload.get('Symbol') and (
+                    positions_payload.get('Quantity') is not None or positions_payload.get('quantity') is not None
+                ):
+                    return [positions_payload]
+            return []
         except Exception as e:
             print(f"Error fetching positions: {e}")
             raise
@@ -89,7 +110,8 @@ class TradeStationAPI:
         """Place an order"""
         self.ensure_authenticated()
         
-        url = f"{self.base_url}/orderexecution/orderconfirm"
+        # Use actual order placement endpoint (not orderconfirm preview endpoint).
+        url = f"{self.base_url}/orderexecution/orders"
         headers = {
             'Authorization': f'Bearer {self.access_token}',
             'Content-Type': 'application/json'
@@ -110,10 +132,16 @@ class TradeStationAPI:
         
         try:
             request_time = datetime.now().isoformat()
+            print(f"[API][PLACE_ORDER] Environment: {self.environment}")
+            print(f"[API][PLACE_ORDER] Account ID: {self.account_id}")
+            print(f"[API][PLACE_ORDER] Endpoint: {url}")
+            print(f"[API][PLACE_ORDER] Payload: {order_data}")
             response = requests.post(url, headers=headers, json=order_data, timeout=10)
             response_time = datetime.now().isoformat()
             response.raise_for_status()
             order_result = response.json()
+            print(f"[API][PLACE_ORDER] HTTP {response.status_code}")
+            print(f"[API][PLACE_ORDER] Response: {order_result}")
             
             return {
                 'success': True,
@@ -130,6 +158,7 @@ class TradeStationAPI:
                     error_msg = str(error_detail)
                 except:
                     error_msg = e.response.text or str(e)
+            print(f"[API][PLACE_ORDER] ERROR: {error_msg}")
             return {
                 'success': False,
                 'error': error_msg,

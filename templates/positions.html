@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="positions-container">
+    <h2>Live Positions</h2>
+    <button onclick="refreshPositions()" class="btn btn-secondary">Refresh</button>
+    <span id="positions-live-status" style="margin-left: 10px; color: #666;">Live refresh: ON</span>
+
+    <div class="accounts-row" style="margin-top: 16px;">
+        <div class="settings-section account-section">
+            <h3>Master Positions</h3>
+            <div class="error-message">
+                <p id="master-positions-error" style="display: none;"></p>
+            </div>
+            <table class="positions-table">
+                <thead>
+                    <tr>
+                        <th>Position ID</th>
+                        <th>Symbol</th>
+                        <th>Qty</th>
+                        <th>Avg Price</th>
+                        <th>Mkt Value</th>
+                        <th>Unrealized P&L</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="master-positions-tbody"></tbody>
+            </table>
+            <div class="no-data" id="master-no-positions" style="display: none;">
+                <p>No master positions found.</p>
+            </div>
+        </div>
+
+        <div class="settings-section account-section">
+            <h3>Client Positions</h3>
+            <div class="error-message">
+                <p id="client-positions-error" style="display: none;"></p>
+            </div>
+            <table class="positions-table">
+                <thead>
+                    <tr>
+                        <th>Position ID</th>
+                        <th>Symbol</th>
+                        <th>Qty</th>
+                        <th>Avg Price</th>
+                        <th>Mkt Value</th>
+                        <th>Unrealized P&L</th>
+                    </tr>
+                </thead>
+                <tbody id="client-positions-tbody"></tbody>
+            </table>
+            <div class="no-data" id="client-no-positions" style="display: none;">
+                <p>No client positions found.</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toNumber(value, fallback = 0) {
+    const n = parseFloat(value);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+function fmtMoney(value) {
+    return `$${toNumber(value, 0).toFixed(2)}`;
+}
+
+function setError(elId, message) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    if (!message) {
+        el.style.display = 'none';
+        el.textContent = '';
+        return;
+    }
+    el.style.display = 'block';
+    el.textContent = message;
+}
+
+function renderRows(positions, tbodyId, noDataId, includeExitButton) {
+    const tbody = document.getElementById(tbodyId);
+    const noData = document.getElementById(noDataId);
+    tbody.innerHTML = '';
+
+    if (!Array.isArray(positions) || positions.length === 0) {
+        noData.style.display = 'block';
+        return;
+    }
+    noData.style.display = 'none';
+
+    positions.forEach((position) => {
+        const qty = toNumber(position.Quantity ?? position.quantity, 0);
+        const avg = toNumber(position.AveragePrice ?? position.AvgPrice, 0);
+        const mkt = toNumber(position.MarketValue, 0);
+        const pnl = toNumber(position.UnrealizedProfitLoss ?? position.UnrealizedPL, 0);
+        const positionId = position.PositionID || position.PositionId || position.OrderID || position.orderId || 'N/A';
+        const symbol = position.Symbol || position.symbol || 'N/A';
+        const longShort = position.LongShort || position.Side || (qty >= 0 ? 'Long' : 'Short');
+
+        const tr = document.createElement('tr');
+        let html = `
+            <td>${positionId}</td>
+            <td>${symbol}</td>
+            <td class="${qty > 0 ? 'positive' : (qty < 0 ? 'negative' : '')}">${qty}</td>
+            <td>${fmtMoney(avg)}</td>
+            <td>${fmtMoney(mkt)}</td>
+            <td class="${pnl >= 0 ? 'positive' : 'negative'}">${fmtMoney(pnl)}</td>
+        `;
+        if (includeExitButton) {
+            html += `<td><button class="btn btn-small" onclick="exitMasterPosition('${symbol}', '${qty}', '${longShort}', '${positionId}')">Exit</button></td>`;
+        }
+        tr.innerHTML = html;
+        tbody.appendChild(tr);
+    });
+}
+
+function loadMasterPositions() {
+    return fetch('/api/master-positions')
+        .then((res) => res.json())
+        .then((data) => {
+            if (!data.success) {
+                setError('master-positions-error', data.message || 'Failed to load master positions');
+                renderRows([], 'master-positions-tbody', 'master-no-positions', true);
+                return;
+            }
+            setError('master-positions-error', '');
+            renderRows(data.positions || [], 'master-positions-tbody', 'master-no-positions', true);
+        })
+        .catch((err) => {
+            setError('master-positions-error', `Error loading master positions: ${err.message}`);
+            renderRows([], 'master-positions-tbody', 'master-no-positions', true);
+        });
+}
+
+function loadClientPositions() {
+    return fetch('/api/client-positions')
+        .then((res) => res.json())
+        .then((data) => {
+            if (!data.success) {
+                setError('client-positions-error', data.message || 'Failed to load client positions');
+                renderRows([], 'client-positions-tbody', 'client-no-positions', false);
+                return;
+            }
+            setError('client-positions-error', '');
+            renderRows(data.positions || [], 'client-positions-tbody', 'client-no-positions', false);
+        })
+        .catch((err) => {
+            setError('client-positions-error', `Error loading client positions: ${err.message}`);
+            renderRows([], 'client-positions-tbody', 'client-no-positions', false);
+        });
+}
+
+function refreshPositions() {
+    Promise.all([loadMasterPositions(), loadClientPositions()]);
+}
+
+function exitMasterPosition(symbol, quantity, longShort, positionId) {
+    if (!confirm(`Exit master position ${symbol} (${quantity})?`)) return;
+    fetch('/api/master-position-exit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            symbol: symbol,
+            quantity: quantity,
+            long_short: longShort,
+            position_id: positionId
+        })
+    })
+    .then((res) => res.json())
+    .then((data) => {
+        if (!data.success) {
+            alert(`Exit failed: ${data.message || 'Unknown error'}`);
+            return;
+        }
+        refreshPositions();
+    })
+    .catch((err) => {
+        alert(`Exit failed: ${err.message}`);
+    });
+}
+
+refreshPositions();
+setInterval(refreshPositions, 1000);
+</script>
+{% endblock %}

@@ -2,6 +2,15 @@ Tradestation credentials
 key:
 secret: 
 
+id: impx7
+pass: impx@$456
+impx7 totp: JUUHGOLJNVIDURRRMQTEGTTWLJ4FURTY
+
+
+id: impx9
+pass: impx@$789
+impx9 totp: OM6FUQCFPBCEWVS2HE7V223LMVPHONDT (master)
+
 refresh: http://localhost:3000/?code=U1WwkIK39Rcnri8VrDqSY_j93gvQbo3xfcF_elRlShOP3
 
 
