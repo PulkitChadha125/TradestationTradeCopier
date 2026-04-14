@@ -26,6 +26,10 @@
                     <span class="nav-icon">📋</span>
                     <span class="nav-text">Order Log</span>
                 </a>
+                <a href="{{ url_for('order_book') }}" class="nav-link {% if request.endpoint == 'order_book' %}active{% endif %}">
+                    <span class="nav-icon">📚</span>
+                    <span class="nav-text">Order Book</span>
+                </a>
             </nav>
         </aside>
         

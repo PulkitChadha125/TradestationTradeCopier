@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="positions-container">
+    <h2>Order Book</h2>
+    <button onclick="refreshOrderBooks()" class="btn btn-secondary">Refresh</button>
+    <span style="margin-left: 10px; color: #666;">Live refresh: 1s</span>
+
+    <div class="accounts-row" style="margin-top: 16px;">
+        <div class="settings-section account-section">
+            <h3>Master Order Book</h3>
+            <div class="error-message"><p id="master-orderbook-error" style="display:none;"></p></div>
+            <table class="positions-table">
+                <thead>
+                    <tr>
+                        <th>Order ID</th><th>Symbol</th><th>Action</th><th>Type</th><th>Qty</th><th>Limit</th><th>Status</th><th>Badge</th>
+                    </tr>
+                </thead>
+                <tbody id="master-orderbook-body"></tbody>
+            </table>
+        </div>
+        <div class="settings-section account-section">
+            <h3>Client Order Book</h3>
+            <div class="error-message"><p id="client-orderbook-error" style="display:none;"></p></div>
+            <table class="positions-table">
+                <thead>
+                    <tr>
+                        <th>Order ID</th><th>Symbol</th><th>Action</th><th>Type</th><th>Qty</th><th>Limit</th><th>Status</th><th>Badge</th>
+                    </tr>
+                </thead>
+                <tbody id="client-orderbook-body"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const ORDERBOOK_BADGE_STYLES = {
+    NEW: 'display:inline-block;padding:2px 8px;border-radius:10px;background:#d1fae5;color:#065f46;font-size:11px;font-weight:600;',
+    MODIFY: 'display:inline-block;padding:2px 8px;border-radius:10px;background:#fef3c7;color:#92400e;font-size:11px;font-weight:600;',
+    CANCEL: 'display:inline-block;padding:2px 8px;border-radius:10px;background:#fee2e2;color:#991b1b;font-size:11px;font-weight:600;'
+};
+
+function setErr(id, msg) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.style.display = msg ? 'block' : 'none';
+    el.textContent = msg || '';
+}
+function rowHtml(o) {
+    const id = o.OrderID || o.orderId || o.ID || 'N/A';
+    const symbol = o.Symbol || 'N/A';
+    const action = o.TradeAction || 'N/A';
+    const type = o.OrderType || 'N/A';
+    const qty = o.Quantity || 'N/A';
+    const lp = o.LimitPrice || '';
+    const status = o.Status || 'N/A';
+    const badge = deriveBadge(status);
+    const badgeHtml = badge ? `<span style="${ORDERBOOK_BADGE_STYLES[badge]}">${badge}</span>` : '';
+    return `<tr><td>${id}</td><td>${symbol}</td><td>${action}</td><td>${type}</td><td>${qty}</td><td>${lp}</td><td>${status}</td><td>${badgeHtml}</td></tr>`;
+}
+
+function deriveBadge(statusRaw) {
+    const status = String(statusRaw || '').toUpperCase();
+    if (['CANCELLED', 'CANCELED', 'EXPIRED', 'REJECTED'].includes(status)) return 'CANCEL';
+    if (['REPLACED', 'CHANGED', 'MODIFIED'].includes(status)) return 'MODIFY';
+    if (['QUEUED', 'RECEIVED', 'SENT', 'WORKING', 'OPEN', 'ACCEPTED', 'PARTIALLYFILLED', 'FILLED'].includes(status)) return 'NEW';
+    return '';
+}
+function renderRows(bodyId, orders) {
+    const body = document.getElementById(bodyId);
+    body.innerHTML = '';
+    (orders || []).forEach((o) => body.insertAdjacentHTML('beforeend', rowHtml(o)));
+}
+async function refreshMasterBook() {
+    try {
+        const r = await fetch('/api/master-orderbook');
+        const d = await r.json();
+        if (!d.success) return setErr('master-orderbook-error', d.message || 'Failed to load');
+        setErr('master-orderbook-error', '');
+        renderRows('master-orderbook-body', d.orders || []);
+    } catch (e) {
+        setErr('master-orderbook-error', e.message);
+    }
+}
+async function refreshClientBook() {
+    try {
+        const r = await fetch('/api/client-orderbook');
+        const d = await r.json();
+        if (!d.success) return setErr('client-orderbook-error', d.message || 'Failed to load');
+        setErr('client-orderbook-error', '');
+        renderRows('client-orderbook-body', d.orders || []);
+    } catch (e) {
+        setErr('client-orderbook-error', e.message);
+    }
+}
+function refreshOrderBooks() {
+    refreshMasterBook();
+    refreshClientBook();
+}
+refreshOrderBooks();
+setInterval(refreshOrderBooks, 1000);
+</script>
+{% endblock %}

@@ -106,7 +106,7 @@ class TradeStationAPI:
             print(f"Error fetching positions: {e}")
             raise
     
-    def place_order(self, symbol, quantity, side, order_type='Market', price=None):
+    def place_order(self, symbol, quantity, side, order_type='Market', price=None, trade_action=None):
         """Place an order"""
         self.ensure_authenticated()
         
@@ -117,12 +117,16 @@ class TradeStationAPI:
             'Content-Type': 'application/json'
         }
         
+        normalized_trade_action = str(trade_action or "").upper().replace(" ", "")
+        if not normalized_trade_action:
+            normalized_trade_action = 'BUY' if quantity > 0 else 'SELL'
+
         order_data = {
             'AccountID': self.account_id,
             'Symbol': symbol,
             'Quantity': str(abs(quantity)),
             'OrderType': order_type,
-            'TradeAction': 'BUY' if quantity > 0 else 'SELL',
+            'TradeAction': normalized_trade_action,
             'TimeInForce': {'Duration': 'DAY'},
             'Route': 'Intelligent'
         }
@@ -142,6 +146,22 @@ class TradeStationAPI:
             order_result = response.json()
             print(f"[API][PLACE_ORDER] HTTP {response.status_code}")
             print(f"[API][PLACE_ORDER] Response: {order_result}")
+
+            # TradeStation can return HTTP 200 with order-level failure in payload.
+            if isinstance(order_result, dict) and isinstance(order_result.get('Orders'), list) and order_result['Orders']:
+                first_order = order_result['Orders'][0]
+                if isinstance(first_order, dict):
+                    error_value = str(first_order.get('Error', '')).upper()
+                    if error_value in {'FAILED', 'ERROR'}:
+                        message = first_order.get('Message', 'Order rejected')
+                        print(f"[API][PLACE_ORDER] ORDER-LEVEL FAILURE: {message}")
+                        return {
+                            'success': False,
+                            'error': message,
+                            'order': order_result,
+                            'request_time': request_time,
+                            'response_time': response_time
+                        }
             
             return {
                 'success': True,

@@ -497,6 +497,11 @@ def order_log():
     orders.reverse()
     return render_template('order_log.html', orders=orders)
 
+@app.route('/order-book')
+def order_book():
+    # In position-based mode, order log is the primary order view.
+    return redirect(url_for('order_log'))
+
 @app.route('/tradebook-master')
 def tradebook_master():
     return redirect(url_for('order_log'))
