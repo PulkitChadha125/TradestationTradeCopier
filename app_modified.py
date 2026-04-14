@@ -321,8 +321,13 @@ class OrderBookTradeCopier:
         apply_cached_access_token("master", self.master_api)
         apply_cached_access_token("client", self.client_api)
 
+    def _normalize_order_id(self, value):
+        return str(value or "").strip()
+
     def _extract_order_id(self, order):
-        return str(order.get("OrderID") or order.get("orderId") or order.get("ID") or order.get("Id") or "")
+        return self._normalize_order_id(
+            order.get("OrderID") or order.get("orderId") or order.get("ID") or order.get("Id") or ""
+        )
 
     def _extract_client_order_id(self, order_response):
         if not isinstance(order_response, dict):
@@ -330,7 +335,7 @@ class OrderBookTradeCopier:
         for key in ("OrderID", "orderID", "OrderId", "orderId", "ID", "Id"):
             value = order_response.get(key)
             if value:
-                return str(value)
+                return self._normalize_order_id(value)
         if isinstance(order_response.get("Orders"), list) and order_response["Orders"]:
             first = order_response["Orders"][0]
             if isinstance(first, dict):
@@ -379,6 +384,33 @@ class OrderBookTradeCopier:
         remaining_qty = _order_remaining_qty(order)
         has_closed_time = bool(_order_filled_or_cancelled_time(order))
         return remaining_qty > 0 and not has_closed_time
+
+    def _order_looks_filled(self, order):
+        status = str(order.get("Status", "")).upper()
+        status_desc = str(order.get("StatusDescription") or order.get("statusDescription") or "").upper()
+        if status in {"FLL", "FILLED", "FIL", "FULLYFILLED", "COMPLETE", "DONE"}:
+            return True
+        if "FILLED" in status_desc:
+            return True
+        # Some broker payloads use OUT for terminal states; only treat as filled
+        # when quantities indicate execution happened.
+        try:
+            filled_qty = float(order.get("FilledQuantity") or 0)
+        except Exception:
+            filled_qty = 0.0
+        remaining_qty = _order_remaining_qty(order)
+        return filled_qty > 0 and remaining_qty <= 0
+
+    def _should_copy_fast_filled_master_order(self, order):
+        """If an order is already filled by the time we poll, still replicate it once."""
+        status = str(order.get("Status", "")).upper()
+        if status in {"REJ", "REJECTED"}:
+            return False
+        if status in self.working_states:
+            return False
+        if status in self.cancel_states and not self._order_looks_filled(order):
+            return False
+        return self._order_looks_filled(order)
 
     def _combine_master_orders(self):
         combined = {}
@@ -613,6 +645,16 @@ class OrderBookTradeCopier:
         )
 
     def _copy_new(self, master_order_id, order):
+        existing_mapping = self.order_map.get(master_order_id)
+        if existing_mapping and existing_mapping.get("copier_order_id") and existing_mapping.get("client_order_id"):
+            print(
+                f"[ORDERBOOK COPIER] SKIP DUPLICATE COPY | "
+                f"master_order_id={master_order_id} "
+                f"copier_order_id={existing_mapping.get('copier_order_id', '')} "
+                f"client_order_id={existing_mapping.get('client_order_id', '')}"
+            )
+            return
+
         sig = self._signature(order)
         if not sig["symbol"] or sig["qty"] == 0:
             return
@@ -750,7 +792,7 @@ class OrderBookTradeCopier:
             if master_order_id not in self.order_map:
                 if master_order_id in self.baseline_order_ids:
                     continue
-                if self._is_order_currently_open(order):
+                if self._is_order_currently_open(order) or self._should_copy_fast_filled_master_order(order):
                     self._copy_new(master_order_id, order)
             else:
                 self._mirror_modify(master_order_id, order)
@@ -770,7 +812,7 @@ class OrderBookTradeCopier:
             account_type="master",
             account_id=self.master_api.account_id,
             orders=open_now,
-            title="LIVE MASTER OPEN ORDERS NOW (every 1s)",
+            title="LIVE MASTER OPEN ORDERS NOW (every 0.3s)",
             include_raw=False,
         )
 
@@ -781,7 +823,7 @@ class OrderBookTradeCopier:
             try:
                 current_orders = self.sync_once()
                 now_ts = time.time()
-                if now_ts - self.last_orderbook_print_ts >= 1.0:
+                if now_ts - self.last_orderbook_print_ts >= 0.3:
                     self._print_live_master_orderbook(current_orders)
                     self.last_orderbook_print_ts = now_ts
                 time.sleep(0.3)
