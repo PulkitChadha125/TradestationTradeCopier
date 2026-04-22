@@ -16,12 +16,13 @@ You can launch it with either:
 ## Features
 
 - Start/Stop trading controls in UI
-- Stop Trading clears active sessions/cache for safe environment switching
+- Stop Trading is a disconnect action that clears active sessions/cache for safe environment switching
 - Master/client credentials with automated OAuth + TOTP login
 - Broker account ID auto-fetch after login (manual account ID entry not required)
 - Per-account environment selection: `paper` or `live`
 - Session reuse with environment/account safety checks
 - Master/client balances and positions views
+- Auto-relogin on position-fetch auth failures (with cooldown) for long-running hosted usage
 - Order-book copier with order mirror logging
 - Duration passthrough support (with TradeStation duration normalization)
 
@@ -72,14 +73,22 @@ Open `http://127.0.0.1:5000`.
 4. Click **Login** (Chrome automation completes OAuth).
 5. App auto-fetches matching broker account ID for selected environment.
 6. Click **Start Trading**.
+7. Keep the positions page open for live polling; backend auto-relogin handles auth-expiry scenarios.
 
 ### Switching Paper <-> Live Safely
 
-1. Click **Stop Trading** (this clears session cache/disconnect state).
+1. Click **Stop Trading** (stops copier if running and clears session cache/login state).
 2. Change environment.
 3. Save credentials.
 4. Login again.
 5. Start Trading again.
+
+## Auto Login / Token Expiry Behavior
+
+- Access tokens are reused while valid.
+- If token expires, refresh-token flow is attempted automatically by backend login paths.
+- During continuous position polling, if auth fails, backend triggers auto-relogin and retries once.
+- A cooldown prevents repeated relogin loops (`30s` between auto-relogin attempts per account).
 
 ## Important Environment Rules
 
@@ -116,6 +125,9 @@ Open `http://127.0.0.1:5000`.
   - Ensure both accounts are logged in
   - Ensure trading is running
   - Check `data/order_log_orderbook.csv` and terminal logs
+- **Hosted app runs for long time and session expires**
+  - Positions endpoint now attempts auto-relogin and retry on auth failure
+  - If still failing, verify refresh token validity and TradeStation credentials
 
 ## References
 

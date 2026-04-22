@@ -31,6 +31,8 @@ login_status = {
     "master": {"logged_in": False, "error": None},
     "client": {"logged_in": False, "error": None},
 }
+auto_relogin_last_attempt_ts = {"master": 0.0, "client": 0.0}
+AUTO_RELOGIN_COOLDOWN_SECONDS = 30
 
 ORDER_BOOK_LOG_FIELDS = [
     "timestamp",
@@ -254,6 +256,35 @@ def clear_cached_session(account_type):
     cache = load_token_cache()
     cache[account_type] = {}
     save_token_cache(cache)
+
+
+def _attempt_auto_relogin(account_type, reason=""):
+    if account_type not in {"master", "client"}:
+        return {"attempted": False, "success": False, "message": "Invalid account type"}
+    now = time.time()
+    last_attempt = float(auto_relogin_last_attempt_ts.get(account_type, 0.0) or 0.0)
+    if (now - last_attempt) < AUTO_RELOGIN_COOLDOWN_SECONDS:
+        return {
+            "attempted": False,
+            "success": False,
+            "message": f"Auto relogin cooldown active ({AUTO_RELOGIN_COOLDOWN_SECONDS}s)",
+        }
+
+    auto_relogin_last_attempt_ts[account_type] = now
+    print(
+        f"[AUTO-RELOGIN] Attempting {account_type} relogin. "
+        f"reason={reason or 'unspecified'}"
+    )
+    result = _perform_account_login(account_type)
+    if result.get("success"):
+        print(f"[AUTO-RELOGIN] {account_type} relogin SUCCESS")
+    else:
+        print(f"[AUTO-RELOGIN] {account_type} relogin FAILED: {result.get('message', '')}")
+    return {
+        "attempted": True,
+        "success": bool(result.get("success")),
+        "message": result.get("message", ""),
+    }
 
 
 def load_api_settings():
@@ -1298,7 +1329,26 @@ def _positions_for(account_type):
         refresh_token=a.get("refresh_token", ""),
     )
     apply_cached_access_token(account_type, api)
-    return api.get_positions()
+    try:
+        return api.get_positions()
+    except Exception as first_error:
+        relogin = _attempt_auto_relogin(account_type, reason=f"positions fetch failed: {first_error}")
+        if not relogin.get("attempted") or not relogin.get("success"):
+            raise
+
+        # Rebuild API object from potentially updated tokens/settings and retry once.
+        refreshed_settings = load_api_settings()
+        g2 = refreshed_settings.get("global", {})
+        a2 = refreshed_settings.get(account_type, {})
+        retry_api = ModifiedTradeStationAPI(
+            client_id=g2.get("api_key", ""),
+            client_secret=g2.get("api_secret", ""),
+            account_id=a2.get("account_id", ""),
+            environment=a2.get("environment", "paper"),
+            refresh_token=a2.get("refresh_token", ""),
+        )
+        apply_cached_access_token(account_type, retry_api)
+        return retry_api.get_positions()
 
 
 def _api_for(account_type):
