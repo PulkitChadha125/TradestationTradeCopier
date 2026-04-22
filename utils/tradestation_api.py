@@ -1,6 +1,7 @@
 import requests
 import base64
 import json
+import copy
 from datetime import datetime
 
 class TradeStationAPI:
@@ -19,6 +20,34 @@ class TradeStationAPI:
         
         self.access_token = None
         self.token_expiry = None
+
+    def _normalize_duration_for_order_api(self, duration):
+        raw = str(duration or '').strip().upper()
+        compact = raw.replace(' ', '')
+        if not compact:
+            return 'DAY'
+        duration_aliases = {
+            'DAY+': 'DYP',
+            'DYP': 'DYP',
+            'GTC+': 'GCP',
+            'GCP': 'GCP',
+            'GTD+': 'GDP',
+            'GDP': 'GDP',
+            '1MIN': '1',
+            '1': '1',
+            '3MIN': '3',
+            '3': '3',
+            '5MIN': '5',
+            '5': '5',
+            'DAY': 'DAY',
+            'GTC': 'GTC',
+            'GTD': 'GTD',
+            'OPG': 'OPG',
+            'CLO': 'CLO',
+            'IOC': 'IOC',
+            'FOK': 'FOK',
+        }
+        return duration_aliases.get(compact, raw)
         
     def authenticate(self):
         """Authenticate and get access token using refresh token"""
@@ -106,7 +135,18 @@ class TradeStationAPI:
             print(f"Error fetching positions: {e}")
             raise
     
-    def place_order(self, symbol, quantity, side, order_type='Market', price=None, trade_action=None):
+    def place_order(
+        self,
+        symbol,
+        quantity,
+        side,
+        order_type='Market',
+        price=None,
+        trade_action=None,
+        duration='DAY',
+        stop_price=None,
+        passthrough_fields=None
+    ):
         """Place an order"""
         self.ensure_authenticated()
         
@@ -120,6 +160,7 @@ class TradeStationAPI:
         normalized_trade_action = str(trade_action or "").upper().replace(" ", "")
         if not normalized_trade_action:
             normalized_trade_action = 'BUY' if quantity > 0 else 'SELL'
+        normalized_duration = self._normalize_duration_for_order_api(duration)
 
         order_data = {
             'AccountID': self.account_id,
@@ -127,12 +168,30 @@ class TradeStationAPI:
             'Quantity': str(abs(quantity)),
             'OrderType': order_type,
             'TradeAction': normalized_trade_action,
-            'TimeInForce': {'Duration': 'DAY'},
-            'Route': 'Intelligent'
         }
+
+        # Carry master order fields that are safe/valid for order placement.
+        if isinstance(passthrough_fields, dict):
+            for key in ('TimeInForce', 'Route', 'AdvancedOptions', 'StopPrice'):
+                value = passthrough_fields.get(key)
+                if value in (None, ''):
+                    continue
+                order_data[key] = copy.deepcopy(value)
+
+        tif_value = order_data.get('TimeInForce')
+        if isinstance(tif_value, dict):
+            existing_duration = tif_value.get('Duration') or tif_value.get('duration')
+            if existing_duration:
+                normalized_duration = self._normalize_duration_for_order_api(existing_duration)
+        elif isinstance(tif_value, str):
+            normalized_duration = self._normalize_duration_for_order_api(tif_value)
+        order_data['TimeInForce'] = {'Duration': normalized_duration}
+        order_data.setdefault('Route', 'Intelligent')
         
         if order_type == 'Limit' and price:
             order_data['LimitPrice'] = str(price)
+        if stop_price not in (None, ''):
+            order_data['StopPrice'] = str(stop_price)
         
         try:
             request_time = datetime.now().isoformat()
@@ -178,6 +237,39 @@ class TradeStationAPI:
                     error_msg = str(error_detail)
                 except:
                     error_msg = e.response.text or str(e)
+
+            # Some environments reject DAY+ (or other durations) even when present
+            # on source orders. Retry once with DAY so replication still executes.
+            if 'INVALID DURATION' in error_msg.upper() and normalized_duration != 'DAY':
+                fallback_payload = copy.deepcopy(order_data)
+                fallback_payload['TimeInForce'] = {'Duration': 'DAY'}
+                fallback_request_time = datetime.now().isoformat()
+                try:
+                    print(
+                        "[API][PLACE_ORDER] Invalid duration rejected; "
+                        f"retrying with DAY (original={normalized_duration})"
+                    )
+                    print(f"[API][PLACE_ORDER] Fallback payload: {fallback_payload}")
+                    fallback_response = requests.post(url, headers=headers, json=fallback_payload, timeout=10)
+                    fallback_response_time = datetime.now().isoformat()
+                    fallback_response.raise_for_status()
+                    fallback_result = fallback_response.json()
+                    print(f"[API][PLACE_ORDER] FALLBACK HTTP {fallback_response.status_code}")
+                    print(f"[API][PLACE_ORDER] FALLBACK Response: {fallback_result}")
+                    return {
+                        'success': True,
+                        'order': fallback_result,
+                        'request_time': fallback_request_time,
+                        'response_time': fallback_response_time
+                    }
+                except Exception as retry_error:
+                    retry_msg = str(retry_error)
+                    if hasattr(retry_error, 'response') and retry_error.response is not None:
+                        try:
+                            retry_msg = str(retry_error.response.json())
+                        except:
+                            retry_msg = retry_error.response.text or str(retry_error)
+                    error_msg = f"{error_msg} | fallback DAY failed: {retry_msg}"
             print(f"[API][PLACE_ORDER] ERROR: {error_msg}")
             return {
                 'success': False,

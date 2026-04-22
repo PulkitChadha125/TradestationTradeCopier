@@ -6,6 +6,7 @@ import re
 import threading
 import time
 import uuid
+import copy
 import requests
 from datetime import datetime, timedelta
 
@@ -342,6 +343,27 @@ class OrderBookTradeCopier:
                 return self._extract_client_order_id(first)
         return ""
 
+    def _extract_duration(self, order):
+        raw_tif = order.get("TimeInForce") or order.get("timeInForce") or {}
+        duration = ""
+        if isinstance(raw_tif, dict):
+            duration = raw_tif.get("Duration") or raw_tif.get("duration") or ""
+        elif isinstance(raw_tif, str):
+            duration = raw_tif
+        if not duration:
+            duration = order.get("Duration") or order.get("duration") or "DAY"
+        return str(duration).strip().upper()
+
+    def _extract_passthrough_order_fields(self, order):
+        # Copy request-safe fields from master order so client order preserves behavior.
+        passthrough = {}
+        for key in ("TimeInForce", "Route", "StopPrice", "AdvancedOptions"):
+            value = order.get(key)
+            if value in (None, ""):
+                continue
+            passthrough[key] = copy.deepcopy(value)
+        return passthrough
+
     def _signature(self, order):
         first_leg = {}
         legs = order.get("Legs")
@@ -372,7 +394,10 @@ class OrderBookTradeCopier:
             "open_or_close": str(order.get("OpenOrClose") or first_leg.get("OpenOrClose") or "").upper(),
             "asset_type": str(order.get("AssetType") or first_leg.get("AssetType") or "").upper(),
             "order_type": str(order.get("OrderType", "Market")),
+            "duration": self._extract_duration(order),
             "limit_price": str(order.get("LimitPrice", "")) if order.get("LimitPrice") is not None else "",
+            "stop_price": str(order.get("StopPrice", "")) if order.get("StopPrice") is not None else "",
+            "passthrough_order_fields": self._extract_passthrough_order_fields(order),
         }
 
     def _is_order_currently_open(self, order):
@@ -642,6 +667,9 @@ class OrderBookTradeCopier:
             order_type=sig.get("order_type", "Market"),
             price=sig.get("limit_price") or None,
             trade_action=client_trade_action,
+            duration=sig.get("duration", "DAY"),
+            stop_price=sig.get("stop_price") or None,
+            passthrough_fields=sig.get("passthrough_order_fields", {}),
         )
 
     def _copy_new(self, master_order_id, order):
@@ -662,7 +690,7 @@ class OrderBookTradeCopier:
             f"[ORDERBOOK COPIER] NEW MASTER ORDER DETECTED | "
             f"master_order_id={master_order_id} symbol={sig['symbol']} "
             f"action={sig['trade_action']} qty={sig['qty']} "
-            f"type={sig['order_type']} status={str(order.get('Status', ''))}"
+            f"type={sig['order_type']} duration={sig['duration']} status={str(order.get('Status', ''))}"
         )
         copier_id = f"ORDMAP-{uuid.uuid4().hex[:10].upper()}"
         client_result = self._place_from_signature(sig)
