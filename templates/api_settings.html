@@ -15,7 +15,7 @@
             </button>
             <button type="button" id="stop-copier-btn" class="btn btn-danger btn-large" 
                     onclick="stopCopier()" {% if not copier_running %}style="display: none;"{% endif %}>
-                Stop Copy Trading
+                Stop Trading
             </button>
             <span id="copier-status-text" class="copier-status">
                 {% if copier_running %}
@@ -128,6 +128,24 @@
                        placeholder="Enter master TOTP code">
                 <small class="form-help">Time-based One-Time Password from your authenticator app</small>
             </div>
+            <div class="form-group">
+                <small class="form-help">Account ID will be auto-fetched from broker after login.</small>
+            </div>
+            <div class="form-group">
+                <label>Environment:</label>
+                <div class="inline-options">
+                    <label>
+                        <input type="radio" name="master_environment" value="paper"
+                               {% if not settings.master or settings.master.get('environment', 'paper') != 'live' %}checked{% endif %}>
+                        Paper Trading
+                    </label>
+                    <label>
+                        <input type="radio" name="master_environment" value="live"
+                               {% if settings.master and settings.master.get('environment', 'paper') == 'live' %}checked{% endif %}>
+                        Live Trading
+                    </label>
+                </div>
+            </div>
             <div class="form-actions-inline">
                 <button type="button" class="btn btn-primary" onclick="saveAccountCredentials('master')">
                     Save Master Credentials
@@ -216,6 +234,24 @@
                        placeholder="Enter client TOTP code">
                 <small class="form-help">Time-based One-Time Password from your authenticator app</small>
             </div>
+            <div class="form-group">
+                <small class="form-help">Account ID will be auto-fetched from broker after login.</small>
+            </div>
+            <div class="form-group">
+                <label>Environment:</label>
+                <div class="inline-options">
+                    <label>
+                        <input type="radio" name="client_environment" value="paper"
+                               {% if not settings.client or settings.client.get('environment', 'paper') != 'live' %}checked{% endif %}>
+                        Paper Trading
+                    </label>
+                    <label>
+                        <input type="radio" name="client_environment" value="live"
+                               {% if settings.client and settings.client.get('environment', 'paper') == 'live' %}checked{% endif %}>
+                        Live Trading
+                    </label>
+                </div>
+            </div>
             <div class="form-actions-inline">
                 <button type="button" class="btn btn-primary" onclick="saveAccountCredentials('client')">
                     Save Client Credentials
@@ -283,6 +319,8 @@ async function saveAccountCredentials(accountType) {
     const userId = document.getElementById(`${accountType}_user_id`).value;
     const password = document.getElementById(`${accountType}_password`).value;
     const totp = document.getElementById(`${accountType}_totp`).value;
+    const envRadio = document.querySelector(`input[name="${accountType}_environment"]:checked`);
+    const environment = envRadio ? envRadio.value : 'paper';
     
     if (!userId || !password) {
         const accountName = accountType.charAt(0).toUpperCase() + accountType.slice(1);
@@ -304,7 +342,8 @@ async function saveAccountCredentials(accountType) {
             body: JSON.stringify({
                 user_id: userId,
                 password: password,
-                totp: totp
+                totp: totp,
+                environment: environment
             })
         });
         
@@ -341,6 +380,8 @@ async function loginAccount(accountType) {
     const userId = document.getElementById(`${accountType}_user_id`).value;
     const password = document.getElementById(`${accountType}_password`).value;
     const totp = document.getElementById(`${accountType}_totp`).value;
+    const envRadio = document.querySelector(`input[name="${accountType}_environment"]:checked`);
+    const environment = envRadio ? envRadio.value : 'paper';
     
     if (!userId || !password) {
         showMessage(`Please save ${accountType} credentials first`, 'error');
@@ -363,7 +404,8 @@ async function loginAccount(accountType) {
             body: JSON.stringify({
                 user_id: userId,
                 password: password,
-                totp: totp
+                totp: totp,
+                environment: environment
             })
         });
         const saveResult = await saveResponse.json();
@@ -635,7 +677,7 @@ async function startCopier() {
 }
 
 async function stopCopier() {
-    if (!confirm('Are you sure you want to stop copy trading?')) {
+    if (!confirm('Are you sure you want to stop trading and clear sessions?')) {
         return;
     }
     
@@ -647,7 +689,7 @@ async function stopCopier() {
     stopBtn.textContent = 'Stopping...';
     
     try {
-        const response = await fetch('/api/stop-copier', {
+        const response = await fetch('/api/stop-trading', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -668,7 +710,7 @@ async function stopCopier() {
         showMessage('Error: ' + error.message, 'error');
     } finally {
         stopBtn.disabled = false;
-        stopBtn.textContent = 'Stop Copy Trading';
+        stopBtn.textContent = 'Stop Trading';
     }
 }
 

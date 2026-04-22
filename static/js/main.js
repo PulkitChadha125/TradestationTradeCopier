@@ -32,12 +32,12 @@ function checkCopierStatus() {
             const statusText = document.getElementById('status-text');
             
             if (data.running) {
-                statusText.textContent = 'Copier: Running';
+                statusText.textContent = 'Trading: Running';
                 statusText.style.color = '#28a745';
                 if (startBtn) startBtn.style.display = 'none';
                 if (stopBtn) stopBtn.style.display = 'inline-block';
             } else {
-                statusText.textContent = 'Copier: Stopped';
+                statusText.textContent = 'Trading: Stopped';
                 statusText.style.color = '#666';
                 if (startBtn) startBtn.style.display = 'inline-block';
                 if (stopBtn) stopBtn.style.display = 'none';
@@ -58,21 +58,21 @@ function startCopier() {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            alert('Trade copier started successfully!');
+            alert('Trading started successfully.');
             checkCopierStatus();
         } else {
-            alert('Error starting copier: ' + data.message);
+            alert('Error starting trading: ' + data.message);
         }
     })
     .catch(error => {
-        console.error('Error starting copier:', error);
-        alert('Error starting copier: ' + error.message);
+        console.error('Error starting trading:', error);
+        alert('Error starting trading: ' + error.message);
     });
 }
 
 function stopCopier() {
-    if (confirm('Are you sure you want to stop the trade copier?')) {
-        fetch('/api/stop-copier', {
+    if (confirm('Are you sure you want to stop trading and clear sessions?')) {
+        fetch('/api/stop-trading', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -81,15 +81,15 @@ function stopCopier() {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                alert('Trade copier stopped.');
+                alert(data.message || 'Trading stopped.');
                 checkCopierStatus();
             } else {
-                alert('Error stopping copier: ' + data.message);
+                alert('Error stopping trading: ' + data.message);
             }
         })
         .catch(error => {
-            console.error('Error stopping copier:', error);
-            alert('Error stopping copier: ' + error.message);
+            console.error('Error stopping trading:', error);
+            alert('Error stopping trading: ' + error.message);
         });
     }
 }

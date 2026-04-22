@@ -449,6 +449,26 @@ body {
     border-color: var(--maroon);
 }
 
+.inline-options {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.inline-options label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-weight: 500;
+}
+
+.inline-options input[type="radio"] {
+    width: auto;
+    margin: 0;
+}
+
 .password-input-wrapper {
     position: relative;
     display: flex;

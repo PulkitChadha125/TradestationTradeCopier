@@ -106,7 +106,96 @@ def _today_date_text():
     return datetime.now().date().isoformat()
 
 
-def cache_account_session(account_type, access_token, token_expiry, login_time=None):
+def _normalize_environment(value):
+    return "live" if str(value or "").strip().lower() == "live" else "paper"
+
+
+def _pick_account_id_for_environment(accounts_payload, environment):
+    env = _normalize_environment(environment)
+    candidates = []
+    if isinstance(accounts_payload, list):
+        candidates = [x for x in accounts_payload if isinstance(x, dict)]
+    elif isinstance(accounts_payload, dict):
+        possible_lists = [
+            accounts_payload.get("Accounts"),
+            accounts_payload.get("accounts"),
+            accounts_payload.get("Items"),
+        ]
+        for item in possible_lists:
+            if isinstance(item, list):
+                candidates = [x for x in item if isinstance(x, dict)]
+                break
+        if not candidates:
+            if any(k in accounts_payload for k in ("AccountID", "Account", "accountId", "account")):
+                candidates = [accounts_payload]
+
+    ids = []
+    for acct in candidates:
+        aid = str(acct.get("AccountID") or acct.get("Account") or acct.get("accountId") or acct.get("account") or "").strip()
+        if aid:
+            ids.append(aid)
+    if not ids:
+        return ""
+
+    if env == "paper":
+        sim_ids = [x for x in ids if x.upper().startswith("SIM")]
+        return sim_ids[0] if sim_ids else ids[0]
+
+    live_ids = [x for x in ids if not x.upper().startswith("SIM")]
+    return live_ids[0] if live_ids else ids[0]
+
+
+def _account_id_matches_environment(account_id, environment):
+    aid = str(account_id or "").strip()
+    if not aid:
+        return False
+    env = _normalize_environment(environment)
+    is_sim = aid.upper().startswith("SIM")
+    return is_sim if env == "paper" else (not is_sim)
+
+
+def _resolve_account_id_if_missing(account_type, account_settings, api_key, api_secret, access_token="", token_expiry=0):
+    if account_type not in {"master", "client"}:
+        return account_settings.get("account_id", "")
+    existing_account_id = str(account_settings.get("account_id", "")).strip()
+    env = _normalize_environment(account_settings.get("environment", "paper"))
+    needs_resolution = (not existing_account_id) or (not _account_id_matches_environment(existing_account_id, env))
+    if not needs_resolution:
+        return existing_account_id
+
+    try:
+        lookup_api = ModifiedTradeStationAPI(
+            client_id=api_key,
+            client_secret=api_secret,
+            account_id="",
+            environment=env,
+            refresh_token=account_settings.get("refresh_token", ""),
+        )
+        if access_token and float(token_expiry or 0) > (time.time() + 30):
+            lookup_api.access_token = access_token
+            lookup_api.token_expiry = float(token_expiry)
+        else:
+            apply_cached_access_token(account_type, lookup_api)
+        lookup_api.ensure_authenticated()
+        accounts_payload = lookup_api.get_account_info()
+        resolved = _pick_account_id_for_environment(accounts_payload, env)
+        if resolved:
+            account_settings["account_id"] = resolved
+            save_account_credentials(account_type, account_settings)
+            cache_account_session(
+                account_type=account_type,
+                access_token=lookup_api.access_token,
+                token_expiry=lookup_api.token_expiry,
+                account_id=resolved,
+                environment=env,
+            )
+            return resolved
+    except Exception as e:
+        print(f"[ACCOUNT RESOLVE] Failed to auto-detect account id for {account_type}: {e}")
+    return ""
+
+
+def cache_account_session(account_type, access_token, token_expiry, login_time=None, account_id="", environment="paper"):
     if account_type not in {"master", "client"}:
         return
     cache = load_token_cache()
@@ -115,6 +204,8 @@ def cache_account_session(account_type, access_token, token_expiry, login_time=N
         "token_expiry": float(token_expiry or 0),
         "last_login_time": login_time or datetime.now().isoformat(),
         "login_date": _today_date_text(),
+        "account_id": str(account_id or "").strip(),
+        "environment": _normalize_environment(environment),
     }
     save_token_cache(cache)
 
@@ -129,15 +220,40 @@ def _session_is_usable_today(session):
     return bool(access_token) and token_expiry > (time.time() + 30)
 
 
+def _session_matches_context(session, account_id="", environment="paper"):
+    if not isinstance(session, dict):
+        return False
+    cached_env = _normalize_environment(session.get("environment"))
+    current_env = _normalize_environment(environment)
+    cached_account_id = str(session.get("account_id") or "").strip()
+    current_account_id = str(account_id or "").strip()
+    return cached_env == current_env and cached_account_id == current_account_id
+
+
 def apply_cached_access_token(account_type, api):
     if account_type not in {"master", "client"} or not api:
         return False
     session = load_token_cache().get(account_type, {})
     if not _session_is_usable_today(session):
         return False
+    # Avoid cross-environment/account token reuse when users switch settings.
+    if not _session_matches_context(
+        session,
+        account_id=getattr(api, "account_id", ""),
+        environment=getattr(api, "environment", "paper"),
+    ):
+        return False
     api.access_token = session.get("access_token")
     api.token_expiry = float(session.get("token_expiry") or 0)
     return True
+
+
+def clear_cached_session(account_type):
+    if account_type not in {"master", "client"}:
+        return
+    cache = load_token_cache()
+    cache[account_type] = {}
+    save_token_cache(cache)
 
 
 def load_api_settings():
@@ -879,12 +995,32 @@ def _perform_account_login(account_type):
         return {"success": False, "message": "Please configure global API credentials first"}
 
     cached_session = load_token_cache().get(account_type, {})
-    if _session_is_usable_today(cached_session):
+    session_matches_current_settings = _session_matches_context(
+        cached_session,
+        account_id=account_settings.get("account_id", ""),
+        environment=account_settings.get("environment", "paper"),
+    )
+    if _session_is_usable_today(cached_session) and session_matches_current_settings:
+        resolved = _resolve_account_id_if_missing(
+            account_type=account_type,
+            account_settings=account_settings,
+            api_key=api_key,
+            api_secret=api_secret,
+            access_token=cached_session.get("access_token", ""),
+            token_expiry=cached_session.get("token_expiry", 0),
+        )
+        if not resolved:
+            login_status[account_type] = {"logged_in": False, "error": "Could not auto-detect account id from broker"}
+            return {"success": False, "message": "Could not auto-detect account id from broker"}
         login_status[account_type] = {"logged_in": True, "error": None}
         return {"success": True, "message": f"{account_type.capitalize()} already logged in today (cached token reused)"}
 
     # If login happened today but token expired, refresh via refresh token without browser relogin.
-    if cached_session.get("login_date") == _today_date_text() and account_settings.get("refresh_token"):
+    if (
+        cached_session.get("login_date") == _today_date_text()
+        and session_matches_current_settings
+        and account_settings.get("refresh_token")
+    ):
         try:
             session_api = ModifiedTradeStationAPI(
                 client_id=api_key,
@@ -898,10 +1034,23 @@ def _perform_account_login(account_type):
                 account_type=account_type,
                 access_token=session_api.access_token,
                 token_expiry=session_api.token_expiry,
+                account_id=account_settings.get("account_id", ""),
+                environment=account_settings.get("environment", "paper"),
             )
             if session_api.refresh_token and session_api.refresh_token != account_settings.get("refresh_token"):
                 account_settings["refresh_token"] = session_api.refresh_token
                 save_account_credentials(account_type, account_settings)
+            resolved = _resolve_account_id_if_missing(
+                account_type=account_type,
+                account_settings=account_settings,
+                api_key=api_key,
+                api_secret=api_secret,
+                access_token=session_api.access_token,
+                token_expiry=session_api.token_expiry,
+            )
+            if not resolved:
+                login_status[account_type] = {"logged_in": False, "error": "Could not auto-detect account id from broker"}
+                return {"success": False, "message": "Could not auto-detect account id from broker"}
             login_status[account_type] = {"logged_in": True, "error": None}
             return {"success": True, "message": f"{account_type.capitalize()} token refreshed without relogin"}
         except Exception:
@@ -952,7 +1101,20 @@ def _perform_account_login(account_type):
                 account_type=account_type,
                 access_token=access_token,
                 token_expiry=time.time() + expires_in,
+                account_id=account_settings.get("account_id", ""),
+                environment=account_settings.get("environment", "paper"),
             )
+        resolved = _resolve_account_id_if_missing(
+            account_type=account_type,
+            account_settings=account_settings,
+            api_key=api_key,
+            api_secret=api_secret,
+            access_token=access_token,
+            token_expiry=time.time() + expires_in,
+        )
+        if not resolved:
+            login_status[account_type] = {"logged_in": False, "error": "Could not auto-detect account id from broker"}
+            return {"success": False, "message": "Could not auto-detect account id from broker"}
         login_status[account_type] = {"logged_in": True, "error": None}
         return {"success": True, "message": f"{account_type.capitalize()} account logged in successfully"}
     except Exception as e:
@@ -1024,10 +1186,12 @@ def api_save_account_credentials(account_type):
         "password": data.get("password", ""),
         "totp": data.get("totp", ""),
         "refresh_token": existing.get("refresh_token", ""),
-        "account_id": existing.get("account_id", ""),
-        "environment": existing.get("environment", "paper"),
+        # Account ID is now broker-resolved post-login; do not take manual UI input.
+        "account_id": "",
+        "environment": _normalize_environment(data.get("environment", existing.get("environment", "paper"))),
     }
     save_account_credentials(account_type, creds)
+    clear_cached_session(account_type)
     login_status[account_type] = {"logged_in": False, "error": None}
     return jsonify({"success": True, "message": f"{account_type.capitalize()} credentials saved successfully"})
 
@@ -1058,7 +1222,13 @@ def api_get_balance(account_type):
         )
         apply_cached_access_token(account_type, api)
         api.ensure_authenticated()
-        cache_account_session(account_type, api.access_token, api.token_expiry)
+        cache_account_session(
+            account_type,
+            api.access_token,
+            api.token_expiry,
+            account_id=a.get("account_id", ""),
+            environment=a.get("environment", "paper"),
+        )
         balance = api.get_account_balance()
         if isinstance(balance, dict) and isinstance(balance.get("Balances"), list) and balance["Balances"]:
             balance = balance["Balances"][0]
@@ -1091,12 +1261,24 @@ def api_start_trading():
 def api_stop_copier():
     global copier_running
     with copier_lock:
-        if not copier_running:
-            return jsonify({"success": False, "message": "Copier not running"})
+        was_running = copier_running
         if orderbook_copier:
             orderbook_copier.stop()
+        clear_cached_session("master")
+        clear_cached_session("client")
+        login_status["master"] = {"logged_in": False, "error": None}
+        login_status["client"] = {"logged_in": False, "error": None}
         copier_running = False
-        return jsonify({"success": True, "message": "Order-book copier stopped"})
+        if was_running:
+            msg = "Trading stopped. Sessions cleared. Safe to switch live/paper."
+        else:
+            msg = "Sessions cleared. Safe to switch live/paper."
+        return jsonify({"success": True, "message": msg})
+
+
+@app.route("/api/stop-trading", methods=["POST"])
+def api_stop_trading():
+    return api_stop_copier()
 
 
 @app.route("/api/copier-status", methods=["GET"])
